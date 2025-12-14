@@ -11,6 +11,11 @@ export const ClassDefinitions = {
         description: 'A stalwart defender clad in heavy armor. Excels at tanking damage and protecting allies.',
         color: '#7899c4',
         
+        // Default melee attack with improved range
+        defaultAttackType: 'melee',
+        defaultAttackRange: 180, // Large melee strike radius
+        defaultAttackElement: 'physical',
+        
         baseStats: {
             strength: 14,
             agility: 8,
@@ -74,6 +79,11 @@ export const ClassDefinitions = {
         name: 'Viking',
         description: 'A fierce berserker from the north. Gains power as health decreases.',
         color: '#8b4513',
+        
+        // Default melee attack with improved range
+        defaultAttackType: 'melee',
+        defaultAttackRange: 170, // Large melee strike radius
+        defaultAttackElement: 'physical',
         
         baseStats: {
             strength: 18,
@@ -142,6 +152,11 @@ export const ClassDefinitions = {
         description: 'A disciplined warrior focused on precise, devastating strikes.',
         color: '#dc143c',
         
+        // Default melee attack with extended katana reach
+        defaultAttackType: 'melee',
+        defaultAttackRange: 190, // Long katana reach
+        defaultAttackElement: 'physical',
+        
         baseStats: {
             strength: 15,
             agility: 14,
@@ -162,7 +177,7 @@ export const ClassDefinitions = {
         sprintMultiplier: 1.4,
         canSprint: true,
         canDash: true,
-        dashDistance: 100,
+        dashDistance: 150,
         dashCooldown: 2,
         
         weaponTypes: ['katana', 'naginata'],
@@ -212,6 +227,11 @@ export const ClassDefinitions = {
         description: 'A deadly shadow that strikes from the darkness. Masters of critical hits and evasion.',
         color: '#2f2f2f',
         
+        // Default attack is poison-infused melee
+        defaultAttackType: 'melee',
+        defaultAttackRange: 150, // Extended dagger reach
+        defaultAttackElement: 'poison',
+        
         baseStats: {
             strength: 10,
             agility: 18,
@@ -232,8 +252,8 @@ export const ClassDefinitions = {
         sprintMultiplier: 1.6,
         canSprint: true,
         canDash: true,
-        dashDistance: 120,
-        dashCooldown: 1.5,
+        dashDistance: 180,
+        dashCooldown: 0, // No cooldown on dash for assassin
         dashInvulnerable: true,
         
         weaponTypes: ['dagger', 'short_sword', 'throwing_knife'],
@@ -289,6 +309,11 @@ export const ClassDefinitions = {
         description: 'A versatile shadow warrior using both martial arts and ninjutsu techniques.',
         color: '#1a1a2e',
         
+        // Default attack is kunai melee
+        defaultAttackType: 'melee',
+        defaultAttackRange: 160, // Extended kunai reach
+        defaultAttackElement: 'physical',
+        
         baseStats: {
             strength: 12,
             agility: 16,
@@ -309,11 +334,11 @@ export const ClassDefinitions = {
         sprintMultiplier: 1.5,
         canSprint: true,
         canDash: true,
-        dashDistance: 100,
-        dashCooldown: 1.8,
+        dashDistance: 150,
+        dashCooldown: 0, // No cooldown on dash for ninja
         canWallJump: true,
         
-        weaponTypes: ['shuriken', 'kunai', 'ninjato', 'kusarigama'],
+        weaponTypes: ['kunai', 'shuriken', 'ninjato', 'kusarigama'],
         armorTypes: ['light'],
         
         abilities: [
@@ -369,6 +394,12 @@ export const ClassDefinitions = {
         description: 'A master of ranged combat with deadly accuracy.',
         color: '#228b22',
         
+        // Default attack is a ranged arrow shot
+        defaultAttackType: 'arrow',
+        defaultAttackRange: 350,
+        defaultAttackElement: 'physical',
+        defaultAttackSpeed: 550,
+        
         baseStats: {
             strength: 8,
             agility: 16,
@@ -389,7 +420,7 @@ export const ClassDefinitions = {
         sprintMultiplier: 1.4,
         canSprint: true,
         canDash: true,
-        dashDistance: 80,
+        dashDistance: 130,
         dashCooldown: 2.5,
         
         weaponTypes: ['bow', 'crossbow'],
@@ -450,6 +481,13 @@ export const ClassDefinitions = {
         description: 'A dashing swashbuckler combining swordplay with firearm expertise.',
         color: '#4169e1',
         
+        // Default attack is a ranged musket shot
+        defaultAttackType: 'musketShot',
+        defaultAttackRange: 320,
+        defaultAttackElement: 'physical',
+        defaultAttackSpeed: 650,
+        defaultAttackSound: 'musketShot',
+        
         baseStats: {
             strength: 12,
             agility: 14,
@@ -470,7 +508,7 @@ export const ClassDefinitions = {
         sprintMultiplier: 1.4,
         canSprint: true,
         canDash: true,
-        dashDistance: 90,
+        dashDistance: 140,
         dashCooldown: 2,
         
         weaponTypes: ['rapier', 'musket', 'pistol'],
@@ -528,6 +566,12 @@ export const ClassDefinitions = {
         name: 'Mage',
         description: 'A wielder of elemental magic with devastating area attacks.',
         color: '#9370db',
+        
+        // Default attack is a magic projectile, not melee
+        defaultAttackType: 'projectile',
+        defaultAttackRange: 250,
+        defaultAttackElement: 'arcane',
+        defaultAttackSpeed: 450,
         
         baseStats: {
             strength: 4,
@@ -611,6 +655,13 @@ export const ClassDefinitions = {
         name: 'Arcmage',
         description: 'A master of pure arcane energy with reality-bending powers.',
         color: '#da70d6',
+        
+        // Default attack is arcane missiles
+        defaultAttackType: 'projectile',
+        defaultAttackRange: 300,
+        defaultAttackElement: 'arcane',
+        defaultAttackSpeed: 500,
+        defaultAttackHoming: true,
         
         baseStats: {
             strength: 3,
@@ -697,6 +748,12 @@ export const ClassDefinitions = {
         description: 'A practitioner of forbidden shadow magic.',
         color: '#4a0080',
         
+        // Default attack is shadow bolt
+        defaultAttackType: 'projectile',
+        defaultAttackRange: 280,
+        defaultAttackElement: 'dark',
+        defaultAttackSpeed: 400,
+        
         baseStats: {
             strength: 5,
             agility: 8,
@@ -778,6 +835,12 @@ export const ClassDefinitions = {
         description: 'A master of death magic who commands undead minions.',
         color: '#2d5a27',
         
+        // Default attack is BONE SPEAR - piercing bone projectile
+        defaultAttackType: 'boneSpear',
+        defaultAttackRange: 280,
+        defaultAttackElement: 'dark',
+        defaultAttackSpeed: 400,
+        
         baseStats: {
             strength: 4,
             agility: 6,
@@ -806,23 +869,22 @@ export const ClassDefinitions = {
         
         abilities: [
             {
-                name: 'Raise Skeleton',
-                description: 'Summon a skeleton warrior',
-                manaCost: 30,
-                cooldown: 8,
+                name: 'Raise Dead',
+                description: 'Raise a skeletal warrior from the ground to fight for you',
+                manaCost: 25,
+                cooldown: 6,
                 type: 'summon',
                 minionType: 'skeleton',
-                minionStats: { health: 50, damage: 15 }
+                minionStats: { health: 60, damage: 18, duration: 30 }
             },
             {
-                name: 'Bone Spear',
-                description: 'Launch a piercing bone projectile',
-                damage: 40,
+                name: 'Dark Pulse',
+                description: 'Release an expanding ring of dark energy',
+                damage: 35,
                 manaCost: 20,
-                cooldown: 2.5,
-                range: 300,
-                type: 'projectile',
-                piercing: true
+                cooldown: 3,
+                radius: 100,
+                type: 'aoe'
             },
             {
                 name: 'Corpse Explosion',
@@ -857,6 +919,12 @@ export const ClassDefinitions = {
         description: 'A holy servant blessed with healing and protective magic.',
         color: '#f0e68c',
         
+        // Default attack is holy smite
+        defaultAttackType: 'projectile',
+        defaultAttackRange: 220,
+        defaultAttackElement: 'holy',
+        defaultAttackSpeed: 380,
+        
         baseStats: {
             strength: 4,
             agility: 6,
@@ -884,6 +952,18 @@ export const ClassDefinitions = {
         
         abilities: [
             {
+                name: 'Holy Purge',
+                description: 'Unleash a purifying wave of holy energy at target location',
+                damage: 50,
+                manaCost: 30,
+                cooldown: 4,
+                range: 280,
+                radius: 100,
+                type: 'holyPurge',
+                element: 'holy',
+                targetType: 'cursor'
+            },
+            {
                 name: 'Holy Light',
                 description: 'Heal an ally or damage undead',
                 healAmount: 40,
@@ -892,17 +972,6 @@ export const ClassDefinitions = {
                 cooldown: 2,
                 range: 200,
                 type: 'targeted',
-                element: 'holy'
-            },
-            {
-                name: 'Smite',
-                description: 'Call down holy fire on enemies',
-                damage: 35,
-                manaCost: 25,
-                cooldown: 3,
-                range: 250,
-                radius: 60,
-                type: 'aoe',
                 element: 'holy'
             },
             {
@@ -937,27 +1006,27 @@ export const ClassDefinitions = {
         color: '#6b8e23',
         
         baseStats: {
-            strength: 12,
-            agility: 10,
-            intelligence: 12,
-            vitality: 12,
+            strength: 10, // Reduced from 12
+            agility: 9,   // Reduced from 10
+            intelligence: 10, // Reduced from 12
+            vitality: 11, // Reduced from 12
             luck: 8
         },
         
         statGrowth: {
-            strength: 2,
-            agility: 1.5,
-            intelligence: 2,
-            vitality: 1.5,
+            strength: 1.6,  // Reduced from 2
+            agility: 1.3,   // Reduced from 1.5
+            intelligence: 1.6, // Reduced from 2
+            vitality: 1.3,  // Reduced from 1.5
             luck: 1
         },
         
-        baseSpeed: 145,
-        sprintMultiplier: 1.3,
+        baseSpeed: 135, // Reduced from 145
+        sprintMultiplier: 1.25, // Reduced from 1.3
         canSprint: true,
         canDash: true,
-        dashDistance: 80,
-        dashCooldown: 3,
+        dashDistance: 110, // Reduced from 130
+        dashCooldown: 4, // Increased from 3
         
         weaponTypes: ['enchanted_sword', 'magic_lance', 'runic_axe'],
         armorTypes: ['medium', 'heavy'],
@@ -966,49 +1035,49 @@ export const ClassDefinitions = {
             {
                 name: 'Arcane Blade',
                 description: 'Enchant weapon with arcane energy',
-                bonusDamage: 25,
-                duration: 10,
-                manaCost: 25,
-                cooldown: 15,
+                bonusDamage: 15, // Reduced from 25
+                duration: 8, // Reduced from 10
+                manaCost: 30, // Increased from 25
+                cooldown: 18, // Increased from 15
                 type: 'buff',
                 element: 'arcane'
             },
             {
                 name: 'Spell Shield',
                 description: 'Create a barrier blocking magic damage',
-                absorb: 100,
-                manaCost: 35,
-                cooldown: 12,
-                duration: 5,
+                absorb: 60, // Reduced from 100
+                manaCost: 40, // Increased from 35
+                cooldown: 15, // Increased from 12
+                duration: 4, // Reduced from 5
                 type: 'buff',
                 blockType: 'magic'
             },
             {
                 name: 'Elemental Strike',
                 description: 'Charged attack infused with elemental power',
-                damage: 50,
-                staminaCost: 20,
-                manaCost: 15,
-                cooldown: 5,
-                range: 60,
+                damage: 35, // Reduced from 50
+                staminaCost: 25, // Increased from 20
+                manaCost: 20, // Increased from 15
+                cooldown: 7, // Increased from 5
+                range: 55, // Reduced from 60
                 type: 'melee',
                 elementCycle: ['fire', 'ice', 'lightning']
             },
             {
                 name: 'Runic Explosion',
                 description: 'Detonate runes placed on enemies',
-                damage: 35,
-                manaCost: 30,
-                cooldown: 8,
-                radius: 100,
+                damage: 25, // Reduced from 35
+                manaCost: 35, // Increased from 30
+                cooldown: 10, // Increased from 8
+                radius: 80, // Reduced from 100
                 type: 'aoe',
                 requiresRune: true
             }
         ],
         
         passives: [
-            { name: 'Battlemage', effect: 'Melee attacks restore 5 mana' },
-            { name: 'Spell Warrior', effect: '+15% physical and magic damage' }
+            { name: 'Battlemage', effect: 'Melee attacks restore 3 mana' }, // Reduced from 5
+            { name: 'Spell Warrior', effect: '+10% physical and magic damage' } // Reduced from 15%
         ]
     }
 };

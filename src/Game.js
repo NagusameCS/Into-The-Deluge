@@ -6,14 +6,17 @@
 import { Engine, Scene } from './engine/core/Engine.js';
 import { Entity, SpriteComponent, AnimationComponent, HealthComponent, ColliderComponent } from './engine/core/Entity.js';
 import { Vector2, randomFloat, randomInt, clamp } from './engine/core/Utils.js';
+import { SoundManager, FLOOR_THEMES, FLOOR_ORDER } from './engine/core/SoundManager.js';
 import { Character } from './classes/Character.js';
 import { ClassDefinitions } from './classes/ClassDefinitions.js';
 import { SkillTree, SkillTreeDefinitions } from './classes/SkillTree.js';
-import { WeaponTypes, WeaponRarities, generateWeaponDrop } from './combat/Weapon.js';
+import { WeaponTypes, WeaponRarities, generateWeaponDrop, generateBossWeapon } from './combat/Weapon.js';
 import { CombatManager } from './combat/Combat.js';
-import { Enemy, EnemyTypes, BossTypes, generateEnemyDrop } from './combat/Enemy.js';
+import { Enemy, EnemyTypes, BossTypes, FloorEnemies, generateEnemyDrop } from './combat/Enemy.js';
 import { DungeonGenerator, DungeonRenderer, TILE_TYPES } from './dungeon/DungeonGenerator.js';
-import { UIManager, HUD, SkillTreePanel, InventoryPanel, ClassSelectionUI } from './ui/UI.js';
+import { PuzzleFactory } from './dungeon/Puzzles.js';
+import { PuzzleUI } from './ui/PuzzleUI.js';
+import { UIManager, HUD, SkillTreePanel, InventoryPanel, ClassSelectionUI, PauseMenu } from './ui/UI.js';
 
 // Game states
 const GameState = {
@@ -74,9 +77,23 @@ class PlayerController {
         // Sprint (hold Shift)
         const isSprinting = this.engine.isKeyPressed('ShiftLeft') || this.engine.isKeyPressed('ShiftRight');
         
-        // Dash (Space)
-        if (this.engine.isKeyPressed('Space')) {
-            this.character.dash(this.moveDirection.x, this.moveDirection.y);
+        // Dash, Teleport, or Parry (Space)
+        if (this.engine.wasKeyJustPressed('Space')) {
+            // Mages teleport, dash classes dash, others parry
+            if (this.character.canTeleport) {
+                this.character.teleport(this.moveDirection.x, this.moveDirection.y);
+            } else if (this.character.canDash) {
+                this.character.dash(this.moveDirection.x, this.moveDirection.y);
+            } else if (this.character.canParry) {
+                // Parry for non-dash/non-teleport classes
+                this.character.startParry();
+            }
+        }
+        // Also allow holding Space for dash (for dash chaining)
+        else if (this.engine.isKeyPressed('Space')) {
+            if (this.character.canDash && !this.character.canTeleport) {
+                this.character.dash(this.moveDirection.x, this.moveDirection.y);
+            }
         }
         
         // Movement
@@ -112,6 +129,9 @@ class GameScene extends Scene {
         this.uiManager = new UIManager(engine.ctx, engine.canvas);
         this.hud = new HUD(engine.canvas);
         
+        // Level up screen state
+        this.levelUpScreenActive = false;
+        
         // Create player
         this.player = this.createPlayer(selectedClass);
         this.hud.setPlayer(this.player);
@@ -127,11 +147,36 @@ class GameScene extends Scene {
         // Inventory panel
         this.inventoryPanel = new InventoryPanel(engine.canvas, this.player);
         
+        // Puzzle UI (for torch puzzles etc - kept for future use)
+        this.puzzleUI = new PuzzleUI(engine.canvas);
+        
+        // Pause menu
+        this.pauseMenu = new PauseMenu(engine.canvas, this);
+        
+        // Visual settings (controlled by pause menu)
+        this.visualSettings = {
+            screenShake: true,
+            hitFreeze: true,
+            screenFlash: true,
+            particles: true
+        };
+        
         // Dungeon
         this.dungeonGenerator = new DungeonGenerator();
         this.dungeonRenderer = new DungeonRenderer();
         this.dungeon = null;
         this.currentFloor = 1;
+        
+        // Floor theme system
+        this.currentFloorTheme = FLOOR_ORDER[0]; // Start with egypt
+        this.floorThemeIndex = 0;
+        
+        // Sound manager
+        this.soundManager = new SoundManager();
+        this.footstepTimer = 0;
+        this.footstepInterval = 0.5; // seconds between footsteps
+        this.enemySoundTimer = 0;
+        this.enemySoundInterval = 3; // seconds between random enemy sounds
         
         // Entities
         this.enemies = [];
@@ -140,6 +185,50 @@ class GameScene extends Scene {
         
         // Interaction
         this.interactionPrompt = null;
+        
+        // Core system (torch system removed)
+        this.corePosition = null;
+        this.coreBossDefeated = false; // Track if core boss was killed
+        this.dungeonCoreActivated = false; // Track if core has been activated (boss spawned)
+        
+        // Boss fight system
+        this.inBossFight = false;
+        this.bossRoom = null;
+        this.bossRoomLocked = false;
+        
+        // Screen effects for cinematic combat
+        this.screenEffects = {
+            flashColor: null,
+            flashAlpha: 0,
+            flashDecay: 0,
+            hitFreeze: 0,     // Brief pause on big hits
+            bloomIntensity: 0,
+            bloomDecay: 0
+        };
+        
+        // Player afterimages for cinematic attacks
+        this.playerAfterimages = [];
+        this.afterimageTimer = 0;
+        
+        // Non-Euclidean wrap ghost system
+        // Ghost appears at equivalent position on other side and mirrors movement
+        this.wrapGhost = {
+            active: false,
+            timer: 0,
+            delay: 0.15, // Time before player teleports to ghost
+            x: 0,        // Ghost position (controlled by player input)
+            y: 0,
+            offsetX: 0,  // Offset from world edge (for X wrap)
+            offsetY: 0,  // Offset from world edge (for Y wrap)
+            wrapX: false, // Whether wrapping in X
+            wrapY: false  // Whether wrapping in Y
+        };
+        
+        // Fullscreen map toggle
+        this.showFullscreenMap = false;
+        
+        // Quit to main menu flag (checked by Game class)
+        this.quitToMenu = false;
         
         // Camera
         this.camera = engine.camera;
@@ -167,13 +256,27 @@ class GameScene extends Scene {
     }
     
     generateDungeon() {
+        // Determine floor theme based on current floor
+        // Each theme covers multiple floors before cycling
+        this.floorThemeIndex = Math.floor((this.currentFloor - 1) / 2) % FLOOR_ORDER.length;
+        this.currentFloorTheme = FLOOR_ORDER[this.floorThemeIndex];
+        const theme = FLOOR_THEMES[this.currentFloorTheme];
+        
+        // Apply floor theme colors to renderer
+        this.dungeonRenderer.setFloorTheme(theme.colors);
+        
+        // Reset core boss tracking for new floor
+        this.coreBossDefeated = false;
+        this.dungeonCoreActivated = false;
+        
         // Increase difficulty with floor
         const config = {
+            floor: this.currentFloor,
             width: 80 + this.currentFloor * 10,
             height: 80 + this.currentFloor * 10,
             roomCount: 8 + this.currentFloor * 2,
-            minRoomSize: 8,
-            maxRoomSize: 16 + this.currentFloor,
+            minRoomSize: 6,
+            maxRoomSize: Math.min(20, 10 + this.currentFloor), // Cap at 20x20
             corridorWidth: 3,
             enemyDensity: 0.02 + this.currentFloor * 0.005,
             itemDensity: 0.01,
@@ -181,6 +284,18 @@ class GameScene extends Scene {
         };
         
         this.dungeon = this.dungeonGenerator.generate(config);
+        
+        // Update renderer with dungeon reference (needed for core rendering)
+        this.dungeonRenderer.setDungeon(this.dungeon);
+        
+        // Update HUD with dungeon reference for minimap
+        this.hud.setDungeon(this.dungeon);
+        
+        // Update CombatManager with dungeon reference for wall collision
+        this.combatManager.setDungeon(this.dungeon);
+        
+        // Store core position from dungeon generation (torch system removed)
+        this.corePosition = this.dungeon.corePosition || null;
         
         // Find spawn point and place player
         const spawn = this.dungeon.spawnPoints.find(s => s.type === 'player');
@@ -224,6 +339,9 @@ class GameScene extends Scene {
         // Center camera on player
         this.camera.centerOn(this.player.x, this.player.y);
         
+        // Start ambient sound
+        this.soundManager.startAmbient();
+        
         // Spawn enemies
         this.spawnEnemies();
         
@@ -243,22 +361,56 @@ class GameScene extends Scene {
         // Get enemy spawn points
         const enemySpawns = this.dungeon.spawnPoints.filter(s => s.type === 'enemy');
         
-        // Select enemy types based on floor
-        const availableTypes = Object.keys(EnemyTypes).filter(type => {
-            const enemyData = EnemyTypes[type];
-            return this.currentFloor >= (enemyData.minFloor || 1);
-        });
+        // Debug: log spawn point count
+        console.log(`Floor ${this.currentFloor} (${this.currentFloorTheme}): Found ${enemySpawns.length} enemy spawn points out of ${this.dungeon.spawnPoints.length} total spawn points`);
+        
+        // Get floor-themed enemies if available
+        const floorData = FloorEnemies[this.currentFloorTheme];
+        let availableTypes;
+        let enemyPool;
+        
+        if (floorData && floorData.enemies) {
+            // Use floor-themed enemies
+            enemyPool = floorData.enemies;
+            availableTypes = Object.keys(enemyPool);
+            console.log(`Using floor theme enemies: ${availableTypes.join(', ')}`);
+        } else {
+            // Fallback to generic enemies
+            console.log(`No floor data for theme "${this.currentFloorTheme}", using generic enemies`);
+            enemyPool = EnemyTypes;
+            availableTypes = Object.keys(EnemyTypes).filter(type => {
+                const enemyData = EnemyTypes[type];
+                return this.currentFloor >= (enemyData.minFloor || 1) && enemyData.type !== 'boss';
+            });
+        }
+        
+        // Safety check - need enemy types
+        if (availableTypes.length === 0) {
+            console.error('No enemy types available for spawning!');
+            return;
+        }
         
         for (const spawn of enemySpawns) {
             const type = availableTypes[randomInt(0, availableTypes.length - 1)];
-            const enemyData = EnemyTypes[type];
+            const enemyData = enemyPool[type];
+            
+            // Safety check - ensure enemy data exists
+            if (!enemyData) {
+                console.error(`No enemy data for type: ${type}`);
+                continue;
+            }
             
             const enemy = new Enemy(type, enemyData, this.currentFloor);
             enemy.x = spawn.x * 32 + 16;
             enemy.y = spawn.y * 32 + 16;
             
+            // Store sound type for enemy sounds
+            enemy.soundType = enemyData.soundType || 'smallMonsterAttack';
+            
             this.enemies.push(enemy);
         }
+        
+        console.log(`Spawned ${this.enemies.length} enemies`);
     }
     
     spawnBoss() {
@@ -280,7 +432,79 @@ class GameScene extends Scene {
         }
     }
     
+    activateDungeonCore() {
+        // Prevent re-activation if already activated
+        if (this.dungeonCoreActivated) return;
+        this.dungeonCoreActivated = true;
+        
+        // Spawn the floor boss at the core room
+        this.uiManager.addNotification('The Dungeon Core awakens...', 'legendary');
+        this.camera.shake(15, 1.0);
+        
+        // Play boss theme for this floor
+        this.soundManager.playBossTheme(this.currentFloorTheme);
+        
+        // Find the core room
+        const coreRoom = this.dungeon.coreRoom;
+        
+        if (coreRoom) {
+            // Get floor-themed boss if available
+            const floorData = FloorEnemies[this.currentFloorTheme];
+            let bossType, bossData;
+            
+            if (floorData && floorData.boss) {
+                const bossKeys = Object.keys(floorData.boss);
+                bossType = bossKeys[0];
+                bossData = floorData.boss[bossType];
+            } else {
+                // Fallback to generic bosses
+                const bossTypes = Object.keys(BossTypes);
+                bossType = bossTypes[this.currentFloor % bossTypes.length];
+                bossData = BossTypes[bossType];
+            }
+            
+            // Create a stronger boss for the core
+            const boss = new Enemy(bossType, bossData, this.currentFloor + 2, true);
+            boss.x = (coreRoom.x + coreRoom.width / 2) * 32;
+            boss.y = (coreRoom.y + coreRoom.height / 2) * 32;
+            
+            // Make core boss even stronger
+            boss.health *= 1.5;
+            boss.maxHealth *= 1.5;
+            boss.damage *= 1.25;
+            
+            // Mark this as the core boss for tracking
+            boss.isCoreBoss = true;
+            boss.soundType = bossData.soundType || 'largeMagic';
+            
+            this.enemies.push(boss);
+            
+            // NOTE: Keep the core tile as DUNGEON_CORE so player can interact to descend after boss defeat
+            // We use dungeonCoreActivated flag to prevent re-spawning the boss
+            
+            this.uiManager.addNotification(`${bossData.name || bossType} has emerged!`, 'warning');
+        }
+    }
+    
+    advanceToNextFloor() {
+        // Advance to next floor after defeating core boss
+        this.currentFloor++;
+        this.uiManager.addNotification(`Descending to floor ${this.currentFloor}...`, 'legendary');
+        this.camera.shake(10, 0.5);
+        
+        // Generate new dungeon (this will set new floor theme)
+        this.generateDungeon();
+        
+        // Full heal on floor completion as reward
+        this.player.health = Math.min(this.player.maxHealth, this.player.health + Math.floor(this.player.maxHealth * 0.5));
+        this.soundManager.playHeal();
+        this.uiManager.addNotification(`Recovered 50% HP!`, 'heal');
+    }
+    
     openChest(tileX, tileY) {
+        // Play chest sound
+        this.soundManager.playChest();
+        
         // Generate loot
         const roll = Math.random();
         
@@ -289,6 +513,7 @@ class GameScene extends Scene {
             const goldAmount = randomInt(20 + this.currentFloor * 10, 50 + this.currentFloor * 25);
             this.player.gold = (this.player.gold || 0) + goldAmount;
             this.uiManager.addNotification(`Found ${goldAmount} gold!`, 'gold');
+            this.soundManager.playCoin();
         } else if (roll < 0.7) {
             // Weapon
             const weapon = generateWeaponDrop(this.currentFloor, this.player.stats.luck);
@@ -304,6 +529,7 @@ class GameScene extends Scene {
             this.player.health = Math.min(this.player.maxHealth, this.player.health + healAmount);
             this.uiManager.addNotification(`Found health potion! +${healAmount} HP`, 'heal');
             this.uiManager.addDamageNumber(this.player.x, this.player.y - 20, healAmount, false, true);
+            this.soundManager.playHeal();
         } else {
             // Mana potion
             const manaAmount = Math.floor(this.player.maxMana * 0.5);
@@ -320,6 +546,18 @@ class GameScene extends Scene {
     }
     
     update(dt) {
+        // Update screen effects (may cause hit freeze)
+        if (this.updateScreenEffects(dt)) {
+            // In hit freeze - skip most updates but keep rendering
+            return;
+        }
+        
+        // Level up screen - freezes game world
+        if (this.levelUpScreenActive) {
+            this.updateLevelUpScreen();
+            return; // Don't update anything else while allocating stats
+        }
+        
         // Handle UI toggles
         if (this.engine.wasKeyJustPressed('KeyK')) {
             this.skillTreePanel.toggle();
@@ -327,9 +565,63 @@ class GameScene extends Scene {
         if (this.engine.wasKeyJustPressed('KeyI')) {
             this.inventoryPanel.toggle();
         }
+        if (this.engine.wasKeyJustPressed('KeyM')) {
+            this.showFullscreenMap = !this.showFullscreenMap;
+        }
+        // Spell cycling for mage classes (Q key or mouse wheel)
+        if (this.engine.wasKeyJustPressed('KeyQ')) {
+            const newSpell = this.player.cycleSpell?.();
+            if (newSpell) {
+                this.uiManager.addNotification(`Spell: ${newSpell.name}`, 'info');
+            }
+        }
+        
+        // Potion usage - R for health, F for mana
+        if (this.engine.wasKeyJustPressed('KeyR')) {
+            this.useHealthPotion();
+        }
+        if (this.engine.wasKeyJustPressed('KeyF')) {
+            this.useManaPotion();
+        }
+        
         if (this.engine.wasKeyJustPressed('Escape')) {
-            this.skillTreePanel.hide();
-            this.inventoryPanel.hide();
+            // If any panel is open, close it
+            if (this.skillTreePanel.visible || this.inventoryPanel.visible || 
+                this.showFullscreenMap) {
+                this.skillTreePanel.hide();
+                this.inventoryPanel.hide();
+                this.showFullscreenMap = false;
+            } else if (this.pauseMenu.visible) {
+                // If pause menu is open, close it and resume
+                this.pauseMenu.hide();
+                this.gameState = GameState.PLAYING;
+            } else {
+                // Open pause menu
+                this.pauseMenu.show();
+                this.gameState = GameState.PAUSED;
+            }
+            return;
+        }
+        
+        // If pause menu is open, handle its input and skip game updates
+        if (this.pauseMenu.visible) {
+            const mouse = this.engine.getMousePosition();
+            this.pauseMenu.handleHover(mouse.x, mouse.y);
+            
+            if (this.engine.wasMouseJustPressed(0)) {
+                this.pauseMenu.handleClick(mouse.x, mouse.y);
+            }
+            
+            // Handle slider dragging
+            if (this.engine.isMousePressed(0)) {
+                this.pauseMenu.handleDrag(mouse.x, mouse.y);
+            }
+            return;
+        }
+        
+        // If fullscreen map is shown, block other input
+        if (this.showFullscreenMap) {
+            return;
         }
         
         // If a panel is open, handle its input
@@ -340,11 +632,44 @@ class GameScene extends Scene {
             if (this.engine.wasMouseJustPressed(0)) {
                 this.skillTreePanel.handleClick(mouse.x, mouse.y);
             }
+            
+            // Handle keyboard navigation
+            for (const key of ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 
+                               'KeyW', 'KeyA', 'KeyS', 'KeyD', 'Enter', 'Space']) {
+                if (this.engine.wasKeyJustPressed(key)) {
+                    this.skillTreePanel.handleKeyDown(key);
+                    break;
+                }
+            }
+            
             return;
         }
         
         if (this.inventoryPanel.visible) {
+            const mouse = this.engine.getMousePosition();
+            this.inventoryPanel.handleHover(mouse.x, mouse.y);
+            
+            if (this.engine.wasMouseJustPressed(0)) {
+                this.inventoryPanel.handleClick(mouse.x, mouse.y);
+            }
             return;
+        }
+        
+        // Handle puzzle UI if active
+        if (this.puzzleUI.visible) {
+            this.puzzleUI.update(dt);
+            const mouse = this.engine.getMousePosition();
+            
+            if (this.engine.wasMouseJustPressed(0)) {
+                this.puzzleUI.handleClick(mouse.x, mouse.y);
+            }
+            
+            // Allow escape to close puzzle
+            if (this.engine.wasKeyJustPressed('Escape')) {
+                this.puzzleUI.close();
+            }
+            
+            return; // Block other input while puzzle is active
         }
         
         // Update player controller
@@ -354,6 +679,18 @@ class GameScene extends Scene {
         if (this.player.pendingDash) {
             const dash = this.player.pendingDash;
             this.player.pendingDash = null;
+            
+            // Play dash sound
+            this.soundManager.playDash();
+            
+            // Chain dash visual feedback
+            if (this.player.wasChainDash) {
+                this.player.wasChainDash = false;
+                // Add chain effect - screen flash or notification
+                if (this.player.dashChainCount >= 2) {
+                    this.uiManager.addNotification(`Chain x${this.player.dashChainCount}!`, 'success');
+                }
+            }
             
             // Check dash path step by step for walls
             const steps = 12;
@@ -380,8 +717,73 @@ class GameScene extends Scene {
             this.player.y = lastValidY;
         }
         
+        // Handle pending teleport (mage) with wall collision checking
+        if (this.player.pendingTeleport) {
+            const tp = this.player.pendingTeleport;
+            this.player.pendingTeleport = null;
+            
+            // Play teleport sound (use dash sound for now)
+            this.soundManager.playDash();
+            
+            // Calculate target position (5 tiles = 160 pixels)
+            const targetX = tp.startX + tp.dirX * tp.distance;
+            const targetY = tp.startY + tp.dirY * tp.distance;
+            
+            // Check if target position is valid, if not find closest valid spot
+            let finalX = targetX;
+            let finalY = targetY;
+            
+            if (this.isPositionBlocked(targetX, targetY, this.player.width, this.player.height)) {
+                // Walk backwards to find valid position
+                const steps = 10;
+                const stepBack = tp.distance / steps;
+                for (let i = steps - 1; i >= 0; i--) {
+                    const testX = tp.startX + tp.dirX * stepBack * i;
+                    const testY = tp.startY + tp.dirY * stepBack * i;
+                    if (!this.isPositionBlocked(testX, testY, this.player.width, this.player.height)) {
+                        finalX = testX;
+                        finalY = testY;
+                        break;
+                    }
+                }
+            }
+            
+            // Teleport particles at start location
+            this.combatManager.createParticleBurst(tp.startX, tp.startY, 20, {
+                color: '#9370db',
+                speed: 100,
+                lifetime: 0.4,
+                size: 4
+            });
+            
+            // Set player to teleport destination
+            this.player.x = finalX;
+            this.player.y = finalY;
+            
+            // Teleport particles at end location
+            this.combatManager.createParticleBurst(finalX, finalY, 20, {
+                color: '#9370db',
+                speed: 100,
+                lifetime: 0.4,
+                size: 4
+            });
+        }
+        
         // Update player
         this.player.update(dt);
+        
+        // Update potion cooldowns
+        if (this.player.potionCooldowns) {
+            if (this.player.potionCooldowns.health > 0) {
+                this.player.potionCooldowns.health = Math.max(0, this.player.potionCooldowns.health - dt);
+            }
+            if (this.player.potionCooldowns.mana > 0) {
+                this.player.potionCooldowns.mana = Math.max(0, this.player.potionCooldowns.mana - dt);
+            }
+        }
+        
+        // Update and spawn player afterimages for cinematic effect
+        this.updatePlayerAfterimages(dt);
         
         // Check for status effect visuals on player
         if (this.player.pendingStatusVisual) {
@@ -394,14 +796,67 @@ class GameScene extends Scene {
             const attack = this.player.pendingAttack;
             this.combatManager.addAttack(attack, this.player);
             this.player.pendingAttack = null;
+            
+            // Play class-specific attack sound
+            if (attack.attackSound === 'musketShot') {
+                this.soundManager.playMusketShot();
+            } else if (attack.type === 'projectile') {
+                this.soundManager.playArrow();
+            } else {
+                // Melee swing sound
+                this.soundManager.playAttackSound(false);
+            }
         }
         
-        // Collision with dungeon walls
+        // Handle player abilities
+        if (this.player.pendingAbility) {
+            this.executePlayerAbility(this.player.pendingAbility);
+            this.player.pendingAbility = null;
+        }
+        
+        // Update player status effects
+        this.player.updateStatusEffects?.(dt);
+        
+        // Non-Euclidean space: wrap player position FIRST (before wall collision)
+        // This ensures the player is in valid world coordinates before collision checks
+        this.wrapEntityPosition(this.player);
+        
+        // Collision with dungeon walls (after wrapping)
         this.handleWallCollision(this.player);
+        
+        // Collision with boss room obstacles
+        if (this.bossObstacles && this.bossObstacles.length > 0) {
+            this.handleObstacleCollisions(dt);
+        }
+        
+        // Update wrap visual effect
+        this.updateWrapGhost(dt);
+        
+        // Update tile discovery around player
+        if (this.dungeon && this.dungeon.discoverArea) {
+            this.dungeon.discoverArea(this.player.x, this.player.y, 8);
+        }
         
         // Update enemies
         for (const enemy of this.enemies) {
             enemy.update(dt, this.player, this.dungeon);
+            
+            // Boss dash sound trigger
+            if (enemy.playDashSound) {
+                this.soundManager.playDash();
+                enemy.playDashSound = false;
+            }
+            
+            // Update boss dash trail
+            if (enemy.bossDashTrail && enemy.bossDashTrail.length > 0) {
+                for (let i = enemy.bossDashTrail.length - 1; i >= 0; i--) {
+                    enemy.bossDashTrail[i].time -= dt;
+                    enemy.bossDashTrail[i].alpha -= dt * 2.5;
+                    if (enemy.bossDashTrail[i].time <= 0) {
+                        enemy.bossDashTrail.splice(i, 1);
+                    }
+                }
+            }
             
             // Check for status effect visuals on enemy
             if (enemy.pendingStatusVisual) {
@@ -411,11 +866,96 @@ class GameScene extends Scene {
             
             // Enemy attacks
             if (enemy.pendingAttack) {
+                // Add boss element to ALL attacks for colored effects
+                if (enemy.isBoss && enemy.bossElement && !enemy.pendingAttack.element) {
+                    enemy.pendingAttack.element = enemy.bossElement;
+                }
                 this.combatManager.addAttack(enemy.pendingAttack, enemy);
                 enemy.pendingAttack = null;
             }
             
+            // Boss phase transition mob spawning - spawns around entire arena
+            if (enemy.isBoss && enemy.pendingMobSpawn) {
+                const spawnCount = 50; // Always spawn 50 minions
+                const floorData = FloorEnemies[this.currentFloorTheme];
+                let enemyPool = floorData && floorData.enemies ? floorData.enemies : EnemyTypes;
+                const availableTypes = Object.keys(enemyPool);
+                
+                this.uiManager.addNotification('The boss summons a horde!', 'danger');
+                this.camera.shake(15, 0.8);
+                
+                // Get arena bounds
+                const arenaCenter = { x: enemy.x, y: enemy.y };
+                const arenaRadius = 500; // Larger area for spawning
+                
+                for (let i = 0; i < spawnCount; i++) {
+                    // Spawn in rings around the arena with better spacing
+                    const minionsPerRing = 8; // Fewer per ring = more spread out
+                    const ring = Math.floor(i / minionsPerRing);
+                    const angleOffset = ring * 0.4 + Math.random() * 0.2; // Offset each ring with randomness
+                    const angle = (Math.PI * 2 / minionsPerRing) * (i % minionsPerRing) + angleOffset;
+                    const spawnRadius = 120 + ring * 90 + Math.random() * 50; // Rings at 120, 210, 300, etc. - more spread
+                    
+                    // Clamp to arena bounds
+                    const clampedRadius = Math.min(spawnRadius, arenaRadius);
+                    const spawnX = arenaCenter.x + Math.cos(angle) * clampedRadius;
+                    const spawnY = arenaCenter.y + Math.sin(angle) * clampedRadius;
+                    
+                    const type = availableTypes[Math.floor(Math.random() * availableTypes.length)];
+                    const enemyData = enemyPool[type];
+                    
+                    const minion = new Enemy(type, enemyData, this.currentFloor);
+                    minion.x = spawnX;
+                    minion.y = spawnY;
+                    minion.soundType = enemyData.soundType || 'smallMonsterAttack';
+                    minion.isHealingMinion = true; // Mark as healing minion
+                    
+                    // Make minions tankier and more aggressive
+                    minion.health = Math.floor(minion.health * 1.5); // 50% MORE health
+                    minion.maxHealth = minion.health;
+                    minion.aggroRadius = 600; // Large aggro radius - will chase player from far away
+                    minion.attackRange = Math.max(minion.attackRange || 40, 60); // Slightly increased attack range
+                    minion.speed = (minion.speed || 80) * 1.2; // 20% faster
+                    
+                    this.enemies.push(minion);
+                    enemy.addHealingMinion(minion); // Register with boss
+                }
+                
+                enemy.pendingMobSpawn = null;
+            }
+            
             this.handleWallCollision(enemy);
+            
+            // Wrap enemy positions too (but not bosses during boss fights)
+            if (!enemy.isBoss || !this.inBossFight) {
+                this.wrapEntityPosition(enemy);
+            }
+            
+            // Check if player entered boss room and start boss fight
+            if (enemy.isBoss && !this.inBossFight) {
+                const dist = Math.sqrt((this.player.x - enemy.x) ** 2 + (this.player.y - enemy.y) ** 2);
+                if (dist < 300) {
+                    this.startBossFight(enemy);
+                }
+            }
+        }
+        
+        // Lock player and boss in boss room during fight
+        if (this.inBossFight && this.bossRoom) {
+            this.constrainToBossRoom(this.player);
+            // Also constrain the boss - with additional safety check
+            for (const enemy of this.enemies) {
+                if (enemy.isBoss) {
+                    // Safety: reset boss to room center if position is invalid (NaN or way outside room)
+                    if (!isFinite(enemy.x) || !isFinite(enemy.y)) {
+                        enemy.x = (this.bossRoom.x + this.bossRoom.width / 2) * 32;
+                        enemy.y = (this.bossRoom.y + this.bossRoom.height / 2) * 32;
+                        enemy.velocity.x = 0;
+                        enemy.velocity.y = 0;
+                    }
+                    this.constrainToBossRoom(enemy);
+                }
+            }
         }
         
         // Update combat
@@ -431,9 +971,36 @@ class GameScene extends Scene {
                     result.isCrit
                 );
                 
-                // Screen shake on big hits
-                if (result.damage > 50) {
+                // Play attack hit sound
+                this.soundManager.playAttackSound(true);
+                
+                // If player took damage, play hurt sound
+                if (result.target === this.player) {
+                    this.soundManager.playHurt();
+                }
+                
+                // Cinematic effects on hits - with cooldown to prevent spam
+                if (!this.lastHitEffectTime) this.lastHitEffectTime = 0;
+                const hitEffectCooldown = Date.now() - this.lastHitEffectTime > 100; // 100ms cooldown
+                
+                if (result.isCrit && hitEffectCooldown) {
+                    this.lastHitEffectTime = Date.now();
+                    // Critical hit effects
+                    this.camera.shake(8, 0.15);
+                    this.camera.impactEffect(1.08, 0.12);
+                    // Screen flash and bloom for crits (no hit freeze - too disruptive)
+                    this.triggerScreenFlash('#fff', 0.2, 0.06);
+                    this.triggerBloom(0.3, 0.1);
+                } else if (result.damage > 50 && hitEffectCooldown) {
+                    this.lastHitEffectTime = Date.now();
+                    // Screen shake on big hits
                     this.camera.shake(5, 0.1);
+                    this.camera.impactEffect(1.05, 0.08);
+                    this.triggerScreenFlash('#fff', 0.12, 0.05);
+                } else if (result.damage > 20 && hitEffectCooldown) {
+                    this.lastHitEffectTime = Date.now();
+                    // Smaller effect on medium hits
+                    this.camera.shake(2, 0.05);
                 }
             }
         }
@@ -445,10 +1012,20 @@ class GameScene extends Scene {
                 // Award experience
                 this.player.gainExperience(enemy.expReward);
                 
-                // Drop loot
-                if (Math.random() < enemy.dropChance) {
+                // Drop loot - bosses always drop themed weapons
+                if (enemy.isBoss) {
+                    // Boss guaranteed drop - themed weapon!
+                    const bossType = enemy.bossTypeKey || enemy.name.toLowerCase().replace(/\s+/g, '');
+                    const bossWeapon = generateBossWeapon(bossType, enemy.level || this.currentFloor * 5);
+                    this.items.push({
+                        x: enemy.x,
+                        y: enemy.y,
+                        item: bossWeapon
+                    });
+                    this.uiManager.addNotification(`${bossWeapon.name} dropped!`, 'legendary');
+                } else if (Math.random() < enemy.dropChance) {
                     const weapon = generateEnemyDrop(enemy, this.currentFloor);
-                    if (weapon) {
+                    if (weapon && weapon.name) {
                         this.items.push({
                             x: enemy.x,
                             y: enemy.y,
@@ -460,14 +1037,59 @@ class GameScene extends Scene {
                 // Drop gold
                 const goldAmount = randomInt(enemy.level * 5, enemy.level * 15);
                 this.player.gold = (this.player.gold || 0) + goldAmount;
+                this.soundManager.playCoin();
+                
+                // If this was a healing minion, remove it from boss tracking
+                if (enemy.isHealingMinion) {
+                    for (const boss of this.enemies) {
+                        if (boss.isBoss && boss.healingMinions) {
+                            const minionIndex = boss.healingMinions.indexOf(enemy);
+                            if (minionIndex !== -1) {
+                                boss.healingMinions.splice(minionIndex, 1);
+                                // If all minions dead, boss stops healing
+                                if (boss.healingMinions.length === 0) {
+                                    boss.isHealingPhase = false;
+                                    this.uiManager.addNotification('The boss stops healing!', 'info');
+                                }
+                            }
+                        }
+                    }
+                }
                 
                 // Boss kill notification
                 if (enemy.isBoss) {
                     this.uiManager.addNotification(`${enemy.name} defeated!`, 'success');
                     this.camera.shake(15, 0.3);
+                    this.camera.impactEffect(1.15, 0.3); // Cinematic zoom on boss kill
+                    this.camera.slowMo(0.3, 0.4); // Slow motion on boss kill
+                    // Big screen flash and bloom for boss kill
+                    this.triggerScreenFlash('#fff', 0.5, 0.2);
+                    this.triggerBloom(0.6, 0.4);
+                    this.triggerHitFreeze(0.05);
+                    this.soundManager.stopMusic(); // Stop boss music
+                    this.endBossFight(); // Unlock boss room
+                    
+                    // Check if this was the core boss
+                    if (enemy.isCoreBoss) {
+                        this.coreBossDefeated = true;
+                        this.uiManager.addNotification('The core pulses with energy... Interact to descend!', 'legendary');
+                        // Extra safety - ensure music stops
+                        this.soundManager.stopMusic();
+                    }
+                } else if (enemy.isCoreBoss) {
+                    // Fallback: if core boss defeated but not marked as boss
+                    this.coreBossDefeated = true;
+                    this.soundManager.stopMusic();
+                    this.endBossFight();
+                    this.uiManager.addNotification('The core pulses with energy... Interact to descend!', 'legendary');
                 }
                 
                 this.enemies.splice(i, 1);
+                
+                // Stop combat sounds when all enemies are defeated
+                if (this.enemies.length === 0) {
+                    this.soundManager.stopCombatSounds();
+                }
             }
         }
         
@@ -476,6 +1098,12 @@ class GameScene extends Scene {
             this.uiManager.addNotification(`Level Up! Now level ${this.player.level}`, 'levelup');
             this.player.justLeveledUp = false;
             this.camera.shake(3, 0.2);
+            this.soundManager.playLevelUp?.();
+        }
+        
+        // Show level up allocation screen - freezes game world
+        if (this.player.showLevelUpScreen) {
+            this.levelUpScreenActive = true;
         }
         
         // Check if player can multiclass
@@ -490,6 +1118,12 @@ class GameScene extends Scene {
             const dist = Math.sqrt((this.player.x - item.x) ** 2 + (this.player.y - item.y) ** 2);
             
             if (dist < 40) {
+                // Skip invalid items
+                if (!item.item || !item.item.name) {
+                    this.items.splice(i, 1);
+                    continue;
+                }
+                
                 // Auto-pickup
                 if (this.player.addToInventory(item.item)) {
                     this.uiManager.addNotification(`Picked up ${item.item.name}`, 'info');
@@ -507,10 +1141,14 @@ class GameScene extends Scene {
         this.interactionPrompt = null;
         
         if (currentTile === TILE_TYPES.STAIRS_DOWN) {
-            this.interactionPrompt = 'Press E to descend';
-            if (this.engine.wasKeyJustPressed('KeyE')) {
-                this.currentFloor++;
-                this.generateDungeon();
+            // Stairs down - only allow after boss is defeated
+            if (this.coreBossDefeated) {
+                this.interactionPrompt = 'Press E to descend';
+                if (this.engine.wasKeyJustPressed('KeyE')) {
+                    this.advanceToNextFloor();
+                }
+            } else {
+                this.interactionPrompt = 'Defeat the floor boss to proceed';
             }
         } else if (currentTile === TILE_TYPES.STAIRS_UP && this.currentFloor > 1) {
             this.interactionPrompt = 'Press E to ascend';
@@ -524,13 +1162,22 @@ class GameScene extends Scene {
                 this.openChest(playerTileX, playerTileY);
             }
         } else if (currentTile === TILE_TYPES.TRAP) {
-            // Trigger trap damage
-            if (!this.player.invulnerable) {
-                const trapDamage = 10 + this.currentFloor * 5;
+            // Trapped chest - looks like a chest but triggers trap when interacted
+            this.interactionPrompt = 'Press E to open chest';
+            if (this.engine.wasKeyJustPressed('KeyE')) {
+                // Trigger trap damage
+                const trapDamage = 15 + this.currentFloor * 8;
                 this.player.takeDamage(trapDamage);
                 this.uiManager.addDamageNumber(this.player.x, this.player.y - 20, trapDamage, false);
-                this.uiManager.addNotification('Stepped on a trap!', 'warning');
-                this.camera.shake(5, 0.15);
+                this.uiManager.addNotification('It was a trapped chest!', 'warning');
+                this.soundManager.playHit();
+                this.camera.shake(8, 0.2);
+                // Still give some loot as consolation
+                if (Math.random() < 0.5) {
+                    const goldAmount = Math.floor(10 + this.currentFloor * 5);
+                    this.player.gold = (this.player.gold || 0) + goldAmount;
+                    this.uiManager.addNotification(`Found ${goldAmount} gold anyway!`, 'gold');
+                }
                 // Convert trap to floor after triggering
                 this.dungeon.tiles[playerTileY][playerTileX] = TILE_TYPES.FLOOR;
                 this.dungeonRenderer.updateTile(playerTileX, playerTileY, TILE_TYPES.FLOOR);
@@ -544,6 +1191,22 @@ class GameScene extends Scene {
                 const lavaDamage = Math.floor(5 + this.currentFloor * 2);
                 this.player.takeDamage(lavaDamage);
             }
+        } else if (currentTile === TILE_TYPES.DUNGEON_CORE) {
+            // Dungeon core - triggers boss fight or advance if defeated
+            if (this.coreBossDefeated) {
+                this.interactionPrompt = 'Press E to descend to the next floor';
+                if (this.engine.wasKeyJustPressed('KeyE')) {
+                    this.advanceToNextFloor();
+                }
+            } else if (this.dungeonCoreActivated) {
+                // Core has been activated, boss is spawned but not yet defeated
+                this.interactionPrompt = 'Defeat the Core Guardian to proceed';
+            } else {
+                this.interactionPrompt = 'Press E to activate the Dungeon Core';
+                if (this.engine.wasKeyJustPressed('KeyE')) {
+                    this.activateDungeonCore();
+                }
+            }
         } else {
             // Reset speed when on normal ground
             this.player.maxSpeed = this.player.baseSpeed;
@@ -552,18 +1215,522 @@ class GameScene extends Scene {
         // Update UI
         this.uiManager.update(dt);
         
-        // Camera follow player smoothly
-        this.camera.smoothFollow(this.player.x, this.player.y, 5, dt);
+        // Camera follow player smoothly with non-euclidean wrap handling
+        if (this.dungeon) {
+            const worldW = this.dungeon.width * 32;
+            const worldH = this.dungeon.height * 32;
+            
+            // Normal smooth camera follow
+            let targetX = this.player.x;
+            let targetY = this.player.y;
+            
+            // Calculate shortest path to target (accounting for world wrapping)
+            let dx = targetX - this.camera.x;
+            let dy = targetY - this.camera.y;
+            
+            // If the direct distance is more than half the world, teleport camera
+            if (Math.abs(dx) > worldW / 2 || Math.abs(dy) > worldH / 2) {
+                // Large jump detected - teleport camera instantly
+                this.camera.x = targetX;
+                this.camera.y = targetY;
+            } else {
+                // Smooth follow
+                const followSpeed = 5;
+                this.camera.x += dx * followSpeed * dt;
+                this.camera.y += dy * followSpeed * dt;
+            }
+            
+            // Wrap camera position
+            this.camera.x = ((this.camera.x % worldW) + worldW) % worldW;
+            this.camera.y = ((this.camera.y % worldH) + worldH) % worldH;
+        } else {
+            this.camera.smoothFollow(this.player.x, this.player.y, 5, dt);
+        }
         this.camera.update(dt);
+        
+        // ===== SOUND UPDATES =====
+        
+        // Update heartbeat based on health
+        const healthPercent = this.player.health / this.player.maxHealth;
+        this.soundManager.updateHeartbeat(healthPercent);
+        
+        // Start heartbeat if below 50% health
+        if (healthPercent < 0.5 && !this.soundManager.heartbeatEnabled) {
+            this.soundManager.startHeartbeat();
+        } else if (healthPercent >= 0.5 && this.soundManager.heartbeatEnabled) {
+            this.soundManager.stopHeartbeat();
+        }
+        
+        // Footstep sounds when moving
+        const playerSpeed = Math.sqrt(this.player.velocity.x ** 2 + this.player.velocity.y ** 2);
+        if (playerSpeed > 10) {
+            this.footstepTimer += dt;
+            if (this.footstepTimer >= this.footstepInterval) {
+                this.soundManager.playFootstep();
+                this.footstepTimer = 0;
+            }
+        } else {
+            this.footstepTimer = 0;
+        }
+        
+        // Random enemy sounds
+        this.enemySoundTimer += dt;
+        if (this.enemySoundTimer >= this.enemySoundInterval) {
+            if (this.enemies.length > 0) {
+                const randomEnemy = this.enemies[randomInt(0, this.enemies.length - 1)];
+                // Only play if enemy is near player
+                const dist = Math.sqrt((randomEnemy.x - this.player.x) ** 2 + (randomEnemy.y - this.player.y) ** 2);
+                if (dist < 300) {
+                    this.soundManager.play(randomEnemy.soundType || 'smallMonsterAttack', 0.3);
+                }
+            }
+            this.enemySoundTimer = 0;
+            // Randomize next interval
+            this.enemySoundInterval = 2 + Math.random() * 4;
+        }
         
         // Check player death
         if (this.player.health <= 0) {
+            this.soundManager.playDeath();
+            this.soundManager.stopHeartbeat();
+            this.soundManager.fadeMusic(2000); // Fade music over 2 seconds
             return GameState.DEAD;
         }
         
         return GameState.PLAYING;
     }
     
+    // Execute a player ability with visual effects
+    executePlayerAbility(abilityData) {
+        const { ability, targetX, targetY, dirX, dirY, startX, startY, owner } = abilityData;
+        
+        // Create visual particles for ability cast
+        this.createAbilityCastEffect(ability, startX, startY);
+        
+        // Handle different ability types
+        switch (ability.type) {
+            case 'projectile':
+                this.executeProjectileAbility(ability, startX, startY, dirX, dirY, owner);
+                break;
+            case 'melee':
+                this.executeMeleeAbility(ability, startX, startY, targetX, targetY, owner);
+                break;
+            case 'aoe':
+            case 'area':
+                this.executeAOEAbility(ability, targetX, targetY, owner);
+                break;
+            case 'instant':
+                this.executeInstantAbility(ability, targetX, targetY, owner);
+                break;
+            case 'buff':
+                this.executeBuffAbility(ability, owner);
+                break;
+            case 'heal':
+                this.executeHealAbility(ability, owner);
+                break;
+            case 'movement':
+            case 'dash':
+                this.executeMovementAbility(ability, targetX, targetY, owner);
+                break;
+            case 'taunt':
+                this.executeTauntAbility(ability, owner);
+                break;
+            default:
+                // Treat as projectile if has range, else melee
+                if (ability.range && ability.range > 100) {
+                    this.executeProjectileAbility(ability, startX, startY, dirX, dirY, owner);
+                } else {
+                    this.executeMeleeAbility(ability, startX, startY, targetX, targetY, owner);
+                }
+        }
+        
+        // Play ability sound
+        this.soundManager.playAbilitySound?.(ability.element || 'default');
+    }
+    
+    // Create visual effect at cast location
+    createAbilityCastEffect(ability, x, y) {
+        const color = this.getElementColor(ability.element);
+        
+        // Create burst of particles
+        this.combatManager.createParticleBurst(x, y, 8, {
+            color: color,
+            speed: 80,
+            size: 5,
+            lifetime: 0.3,
+            glow: true
+        });
+    }
+    
+    // Get color for an element type
+    getElementColor(element) {
+        const colors = {
+            fire: '#ff6600',
+            ice: '#66ccff',
+            lightning: '#ffff00',
+            poison: '#44ff44',
+            holy: '#ffffaa',
+            dark: '#aa66cc',
+            earth: '#8b7355',
+            electric: '#88ffff',
+            arcane: '#aa88ff',
+            physical: '#ffffff',
+            default: '#88aaff'
+        };
+        return colors[element] || colors.default;
+    }
+    
+    // Execute projectile ability (Fireball, Ice Lance, etc.)
+    executeProjectileAbility(ability, startX, startY, dirX, dirY, owner) {
+        const projectileCount = ability.projectiles || 1;
+        const spread = ability.spread || 0.1;
+        
+        for (let i = 0; i < projectileCount; i++) {
+            const angleOffset = (i - (projectileCount - 1) / 2) * spread;
+            const angle = Math.atan2(dirY, dirX) + angleOffset;
+            
+            this.combatManager.addAttack({
+                type: 'projectile',
+                x: startX,
+                y: startY,
+                targetX: startX + Math.cos(angle) * (ability.range || 300),
+                targetY: startY + Math.sin(angle) * (ability.range || 300),
+                damage: ability.damage || 20,
+                speed: ability.speed || 400,
+                range: ability.range || 300,
+                radius: ability.radius || 20,
+                element: ability.element,
+                homing: ability.homing || false,
+                pierce: ability.pierce || false,
+                effects: ability.effects,
+                isAbility: true
+            }, owner);
+        }
+    }
+    
+    // Execute melee ability (Shield Bash, Backstab, etc.)
+    executeMeleeAbility(ability, startX, startY, targetX, targetY, owner) {
+        this.combatManager.addAttack({
+            type: 'melee',
+            x: startX,
+            y: startY,
+            targetX: targetX,
+            targetY: targetY,
+            damage: ability.damage || 25,
+            range: ability.range || 60,
+            element: ability.element || 'physical',
+            knockback: ability.knockback || 80,
+            effects: ability.effects,
+            isAbility: true
+        }, owner);
+        
+        // Extra particles for melee abilities
+        const color = this.getElementColor(ability.element);
+        this.combatManager.createParticleBurst(startX, startY, 12, {
+            color: color,
+            speed: 200,
+            size: 6,
+            lifetime: 0.25,
+            glow: true
+        });
+    }
+    
+    // Execute AOE ability (Whirlwind, etc.)
+    executeAOEAbility(ability, targetX, targetY, owner) {
+        const radius = ability.radius || ability.range || 80;
+        const color = this.getElementColor(ability.element);
+        
+        // Create AOE zone
+        this.combatManager.aoeZones.push({
+            x: targetX,
+            y: targetY,
+            radius: radius,
+            damage: ability.damage || 30,
+            owner: owner,
+            element: ability.element,
+            lifetime: ability.duration || 0.5,
+            maxLifetime: ability.duration || 0.5,
+            hitInterval: 0.2,
+            lastHitTime: 0,
+            hitEntities: new Set(),
+            effects: ability.effects
+        });
+        
+        // Visual burst
+        this.combatManager.createParticleBurst(targetX, targetY, 20, {
+            color: color,
+            speed: 150,
+            size: 8,
+            lifetime: 0.4,
+            glow: true
+        });
+    }
+    
+    // Execute instant ability (Lightning Bolt chain)
+    executeInstantAbility(ability, targetX, targetY, owner) {
+        const color = this.getElementColor(ability.element);
+        
+        // Find target at location
+        let target = null;
+        let closestDist = ability.range || 250;
+        
+        for (const enemy of this.enemies) {
+            if (!enemy.active) continue;
+            const dx = enemy.x - targetX;
+            const dy = enemy.y - targetY;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            if (dist < closestDist) {
+                closestDist = dist;
+                target = enemy;
+            }
+        }
+        
+        if (target) {
+            // Deal damage
+            target.takeDamage(ability.damage || 40);
+            
+            // Lightning visual - line from player to target
+            this.combatManager.particles.push({
+                x: owner.x,
+                y: owner.y,
+                vx: 0, vy: 0,
+                size: 3,
+                color: color,
+                lifetime: 0.15,
+                maxLifetime: 0.15,
+                isLightning: true,
+                targetX: target.x,
+                targetY: target.y,
+                glow: true
+            });
+            
+            // Chain to additional targets
+            if (ability.chainTargets > 0) {
+                this.chainLightning(target, ability.chainTargets, ability.damage * 0.6, color, owner);
+            }
+        }
+        
+        // Particle burst at target location
+        this.combatManager.createParticleBurst(targetX, targetY, 15, {
+            color: color,
+            speed: 180,
+            size: 4,
+            lifetime: 0.2,
+            glow: true
+        });
+    }
+    
+    // Chain lightning to nearby enemies
+    chainLightning(source, chainsLeft, damage, color, owner) {
+        if (chainsLeft <= 0) return;
+        
+        let closest = null;
+        let closestDist = 150;
+        
+        for (const enemy of this.enemies) {
+            if (!enemy.active || enemy === source) continue;
+            const dx = enemy.x - source.x;
+            const dy = enemy.y - source.y;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            if (dist < closestDist) {
+                closestDist = dist;
+                closest = enemy;
+            }
+        }
+        
+        if (closest) {
+            closest.takeDamage(damage);
+            
+            // Lightning visual
+            this.combatManager.particles.push({
+                x: source.x,
+                y: source.y,
+                vx: 0, vy: 0,
+                size: 2,
+                color: color,
+                lifetime: 0.1,
+                maxLifetime: 0.1,
+                isLightning: true,
+                targetX: closest.x,
+                targetY: closest.y,
+                glow: true
+            });
+            
+            // Continue chain
+            this.chainLightning(closest, chainsLeft - 1, damage * 0.6, color, owner);
+        }
+    }
+    
+    // Execute buff ability (Defensive Stance, Berserker Rage, etc.)
+    executeBuffAbility(ability, owner) {
+        const color = this.getElementColor(ability.element || 'arcane');
+        
+        // Buff particles circling the player
+        for (let i = 0; i < 12; i++) {
+            const angle = (i / 12) * Math.PI * 2;
+            this.combatManager.addParticle(
+                owner.x + Math.cos(angle) * 30,
+                owner.y + Math.sin(angle) * 30,
+                {
+                    vx: Math.cos(angle) * 50,
+                    vy: Math.sin(angle) * 50 - 30,
+                    color: color,
+                    size: 6,
+                    lifetime: 0.6,
+                    glow: true
+                }
+            );
+        }
+        
+        // Rising particles
+        this.combatManager.createParticleBurst(owner.x, owner.y, 10, {
+            color: color,
+            speed: 60,
+            size: 5,
+            lifetime: 0.8,
+            gravity: -50,
+            glow: true
+        });
+        
+        // Play buff sound
+        this.soundManager.playBuffSound?.();
+    }
+    
+    // Execute heal ability with visual light effect
+    executeHealAbility(ability, owner) {
+        // Healing light particles rising up
+        for (let i = 0; i < 20; i++) {
+            const angle = Math.random() * Math.PI * 2;
+            const dist = Math.random() * 25;
+            this.combatManager.addParticle(
+                owner.x + Math.cos(angle) * dist,
+                owner.y + Math.sin(angle) * dist,
+                {
+                    vx: (Math.random() - 0.5) * 30,
+                    vy: -80 - Math.random() * 60,
+                    color: '#88ff88',
+                    size: 5 + Math.random() * 4,
+                    lifetime: 0.8 + Math.random() * 0.4,
+                    glow: true
+                }
+            );
+        }
+        
+        // Golden sparkles
+        for (let i = 0; i < 8; i++) {
+            const angle = (i / 8) * Math.PI * 2;
+            this.combatManager.addParticle(
+                owner.x + Math.cos(angle) * 20,
+                owner.y + Math.sin(angle) * 20,
+                {
+                    vx: Math.cos(angle) * 40,
+                    vy: Math.sin(angle) * 40 - 50,
+                    color: '#ffffaa',
+                    size: 4,
+                    lifetime: 0.5,
+                    glow: true
+                }
+            );
+        }
+        
+        // Play heal sound
+        this.soundManager.playHealSound?.();
+    }
+    
+    // Execute movement ability (dash, teleport, etc.)
+    executeMovementAbility(ability, targetX, targetY, owner) {
+        const dx = targetX - owner.x;
+        const dy = targetY - owner.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        const maxDist = ability.distance || ability.range || 150;
+        
+        const moveDist = Math.min(dist, maxDist);
+        const dirX = dx / (dist || 1);
+        const dirY = dy / (dist || 1);
+        
+        // Store original position for particles
+        const startX = owner.x;
+        const startY = owner.y;
+        
+        // Move player
+        owner.x += dirX * moveDist;
+        owner.y += dirY * moveDist;
+        
+        // Trail particles
+        const color = this.getElementColor(ability.element || 'arcane');
+        for (let i = 0; i < 15; i++) {
+            const t = i / 15;
+            this.combatManager.addParticle(
+                startX + dirX * moveDist * t,
+                startY + dirY * moveDist * t,
+                {
+                    vx: (Math.random() - 0.5) * 50,
+                    vy: (Math.random() - 0.5) * 50,
+                    color: color,
+                    size: 6 - t * 4,
+                    lifetime: 0.3 + Math.random() * 0.2,
+                    glow: true
+                }
+            );
+        }
+        
+        // Arrival burst
+        this.combatManager.createParticleBurst(owner.x, owner.y, 10, {
+            color: color,
+            speed: 100,
+            size: 5,
+            lifetime: 0.3,
+            glow: true
+        });
+        
+        // Brief invulnerability
+        owner.setInvulnerable?.(0.1);
+    }
+    
+    // Execute taunt ability
+    executeTauntAbility(ability, owner) {
+        const range = ability.range || 150;
+        
+        // Taunt all enemies in range
+        for (const enemy of this.enemies) {
+            if (!enemy.active) continue;
+            const dx = enemy.x - owner.x;
+            const dy = enemy.y - owner.y;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            
+            if (dist < range) {
+                enemy.tauntedBy = owner;
+                enemy.tauntDuration = ability.duration || 5;
+            }
+        }
+        
+        // Visual shockwave effect
+        this.combatManager.createParticleBurst(owner.x, owner.y, 16, {
+            color: '#ff6666',
+            speed: 200,
+            size: 6,
+            lifetime: 0.3,
+            glow: true
+        });
+        
+        // Ring of particles
+        for (let i = 0; i < 24; i++) {
+            const angle = (i / 24) * Math.PI * 2;
+            this.combatManager.addParticle(
+                owner.x + Math.cos(angle) * range * 0.8,
+                owner.y + Math.sin(angle) * range * 0.8,
+                {
+                    vx: Math.cos(angle) * 80,
+                    vy: Math.sin(angle) * 80,
+                    color: '#ff4444',
+                    size: 5,
+                    lifetime: 0.4,
+                    glow: true
+                }
+            );
+        }
+    }
+
     handleWallCollision(entity) {
         const halfW = entity.width / 2;
         const halfH = entity.height / 2;
@@ -572,6 +1739,10 @@ class GameScene extends Scene {
         // Store old position to revert if needed
         const oldX = entity.prevX !== undefined ? entity.prevX : entity.x;
         const oldY = entity.prevY !== undefined ? entity.prevY : entity.y;
+        
+        // Calculate movement delta for sliding
+        const moveX = entity.x - oldX;
+        const moveY = entity.y - oldY;
         
         // Check all corners for wall collision
         const checkPoints = [
@@ -608,16 +1779,50 @@ class GameScene extends Scene {
             }
         }
         
-        // Revert position on collision axis
-        if (collidedX) {
+        // Wall sliding: preserve momentum on non-collided axis
+        // Instead of just stopping, slide along the wall
+        if (collidedX && !collidedY) {
+            // Hit horizontal wall, slide vertically
             entity.x = oldX;
-        }
-        if (collidedY) {
+            // Keep Y movement (slide along wall)
+            // Add a small slide factor to preserve some momentum feel
+            if (entity.vx !== undefined && Math.abs(moveX) > 0) {
+                entity.slideVelocityY = (entity.slideVelocityY || 0) + moveX * 0.3;
+                entity.y += entity.slideVelocityY * 0.016; // Apply slide
+            }
+        } else if (collidedY && !collidedX) {
+            // Hit vertical wall, slide horizontally
+            entity.y = oldY;
+            // Keep X movement (slide along wall)
+            if (entity.vy !== undefined && Math.abs(moveY) > 0) {
+                entity.slideVelocityX = (entity.slideVelocityX || 0) + moveY * 0.3;
+                entity.x += entity.slideVelocityX * 0.016; // Apply slide
+            }
+        } else if (collidedX && collidedY) {
+            // Hit corner, revert both
+            entity.x = oldX;
             entity.y = oldY;
         }
         
+        // Decay slide velocity over time
+        if (entity.slideVelocityX) {
+            entity.slideVelocityX *= 0.85;
+            if (Math.abs(entity.slideVelocityX) < 0.1) entity.slideVelocityX = 0;
+        }
+        if (entity.slideVelocityY) {
+            entity.slideVelocityY *= 0.85;
+            if (Math.abs(entity.slideVelocityY) < 0.1) entity.slideVelocityY = 0;
+        }
+        
         // Final safety check - if still in wall, push out
-        for (const point of checkPoints) {
+        const finalCheckPoints = [
+            { x: entity.x - halfW + 2, y: entity.y - halfH + 2 },
+            { x: entity.x + halfW - 2, y: entity.y - halfH + 2 },
+            { x: entity.x - halfW + 2, y: entity.y + halfH - 2 },
+            { x: entity.x + halfW - 2, y: entity.y + halfH - 2 }
+        ];
+        
+        for (const point of finalCheckPoints) {
             const tileX = Math.floor(point.x / tileSize);
             const tileY = Math.floor(point.y / tileSize);
             const tile = this.dungeon.getTile(tileX, tileY);
@@ -631,6 +1836,232 @@ class GameScene extends Scene {
         }
     }
     
+    // Handle collisions with boss room obstacles
+    handleObstacleCollisions(dt) {
+        const player = this.player;
+        const playerRadius = player.width / 2;
+        
+        for (let i = this.bossObstacles.length - 1; i >= 0; i--) {
+            const obstacle = this.bossObstacles[i];
+            
+            if (obstacle.type === 'pillar') {
+                // Pillar collision - push player away
+                const hw = obstacle.width / 2;
+                const hh = obstacle.height / 2;
+                
+                // AABB collision check
+                const dx = player.x - obstacle.x;
+                const dy = player.y - obstacle.y;
+                const overlapX = hw + playerRadius - Math.abs(dx);
+                const overlapY = hh + playerRadius - Math.abs(dy);
+                
+                if (overlapX > 0 && overlapY > 0) {
+                    // Collision! Push player out on the axis with less overlap
+                    if (overlapX < overlapY) {
+                        player.x += (dx > 0 ? overlapX : -overlapX);
+                    } else {
+                        player.y += (dy > 0 ? overlapY : -overlapY);
+                    }
+                }
+                
+                // Check enemy attacks on pillars
+                if (obstacle.destructible) {
+                    for (const projectile of this.projectiles) {
+                        if (projectile.isEnemyProjectile) {
+                            const pdx = projectile.x - obstacle.x;
+                            const pdy = projectile.y - obstacle.y;
+                            if (Math.abs(pdx) < hw + 8 && Math.abs(pdy) < hh + 8) {
+                                obstacle.health -= 25;
+                                projectile.expired = true;
+                                this.combatManager.addDamageNumber(obstacle.x, obstacle.y - 20, 25, '#888');
+                                this.camera.shake(3, 0.1);
+                                
+                                if (obstacle.health <= 0) {
+                                    // Pillar destroyed
+                                    this.bossObstacles.splice(i, 1);
+                                    this.soundManager.play('hit', 0.5);
+                                    // Add destruction particles
+                                    for (let j = 0; j < 8; j++) {
+                                        this.combatManager.addEffect({
+                                            x: obstacle.x + (Math.random() - 0.5) * 30,
+                                            y: obstacle.y + (Math.random() - 0.5) * 30,
+                                            type: 'debris',
+                                            duration: 0.5,
+                                            color: '#666'
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            } else if (obstacle.type === 'hazard') {
+                // Hazard damage - check if player is inside
+                const dx = player.x - obstacle.x;
+                const dy = player.y - obstacle.y;
+                const dist = Math.sqrt(dx * dx + dy * dy);
+                
+                if (dist < obstacle.radius + playerRadius - 5) {
+                    // Player is in hazard
+                    if (!player.invulnerable) {
+                        const damage = obstacle.damage * dt * 2; // Damage per second
+                        player.takeDamage(damage);
+                        
+                        // Push player slightly out of hazard
+                        if (dist > 0) {
+                            const pushForce = 30 * dt;
+                            player.x += (dx / dist) * pushForce;
+                            player.y += (dy / dist) * pushForce;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    // Non-Euclidean space: wrap entity position to keep it within world bounds
+    wrapEntityPosition(entity) {
+        if (!this.dungeon) return;
+        
+        const worldW = this.dungeon.width * 32;
+        const worldH = this.dungeon.height * 32;
+        const edgeThreshold = 32; // Distance from edge to start showing ghost
+        
+        // Calculate wrapped position
+        const wrappedX = ((entity.x % worldW) + worldW) % worldW;
+        const wrappedY = ((entity.y % worldH) + worldH) % worldH;
+        
+        // Check if entity crossed the boundary (not just near it)
+        const crossedX = entity.x < 0 || entity.x >= worldW;
+        const crossedY = entity.y < 0 || entity.y >= worldH;
+        
+        // For player with active ghost: complete the teleport
+        if (entity === this.player && this.wrapGhost.active) {
+            this.wrapGhost.timer += 0; // Timer updated in updateWrapGhost
+            
+            // Ghost position mirrors player movement on other side
+            // Ghost X/Y are updated in updateWrapGhost based on player velocity
+        }
+        
+        // For player: check if we need to start ghost or complete teleport
+        if (entity === this.player) {
+            // Check if near edge (show ghost)
+            const nearLeftEdge = wrappedX < edgeThreshold;
+            const nearRightEdge = wrappedX > worldW - edgeThreshold;
+            const nearTopEdge = wrappedY < edgeThreshold;
+            const nearBottomEdge = wrappedY > worldH - edgeThreshold;
+            
+            // If crossed boundary, teleport instantly
+            if (crossedX || crossedY) {
+                entity.x = wrappedX;
+                entity.y = wrappedY;
+                entity.prevX = wrappedX;
+                entity.prevY = wrappedY;
+                this.camera.x = wrappedX;
+                this.camera.y = wrappedY;
+                this.wrapGhost.active = false;
+                
+                if (entity.dashTrail) {
+                    entity.dashTrail = [];
+                }
+                return;
+            }
+            
+            // Start ghost if near edge and not already active
+            if ((nearLeftEdge || nearRightEdge || nearTopEdge || nearBottomEdge) && !this.wrapGhost.active) {
+                this.wrapGhost.active = true;
+                this.wrapGhost.timer = 0;
+                this.wrapGhost.wrapX = nearLeftEdge || nearRightEdge;
+                this.wrapGhost.wrapY = nearTopEdge || nearBottomEdge;
+                
+                // Calculate ghost position on opposite side
+                if (nearLeftEdge) {
+                    this.wrapGhost.x = wrappedX + worldW;
+                } else if (nearRightEdge) {
+                    this.wrapGhost.x = wrappedX - worldW;
+                } else {
+                    this.wrapGhost.x = wrappedX;
+                }
+                
+                if (nearTopEdge) {
+                    this.wrapGhost.y = wrappedY + worldH;
+                } else if (nearBottomEdge) {
+                    this.wrapGhost.y = wrappedY - worldH;
+                } else {
+                    this.wrapGhost.y = wrappedY;
+                }
+            }
+            
+            // Stop ghost if moved away from edge
+            if (this.wrapGhost.active && !nearLeftEdge && !nearRightEdge && !nearTopEdge && !nearBottomEdge) {
+                this.wrapGhost.active = false;
+            }
+        } else {
+            // Non-player: just wrap position
+            entity.x = wrappedX;
+            entity.y = wrappedY;
+        }
+    }
+    
+    // Update wrap ghost - mirrors player movement, then teleports player
+    updateWrapGhost(dt) {
+        if (!this.wrapGhost.active) return;
+        if (!this.dungeon) return;
+        
+        const worldW = this.dungeon.width * 32;
+        const worldH = this.dungeon.height * 32;
+        
+        // Ghost position = player position + world offset (mirrors exactly)
+        const playerX = this.player.x;
+        const playerY = this.player.y;
+        
+        // Calculate which side the ghost should be on
+        const wrappedX = ((playerX % worldW) + worldW) % worldW;
+        const wrappedY = ((playerY % worldH) + worldH) % worldH;
+        
+        // Update ghost to mirror player on opposite side
+        if (wrappedX < worldW / 2) {
+            this.wrapGhost.x = wrappedX + worldW;
+        } else {
+            this.wrapGhost.x = wrappedX - worldW;
+        }
+        
+        if (wrappedY < worldH / 2) {
+            this.wrapGhost.y = wrappedY + worldH;
+        } else {
+            this.wrapGhost.y = wrappedY - worldH;
+        }
+        
+        this.wrapGhost.timer += dt;
+        
+        // After delay, teleport player to ghost position (wrapped)
+        if (this.wrapGhost.timer >= this.wrapGhost.delay) {
+            // Only teleport if player is still near edge
+            const edgeThreshold = 32;
+            const nearEdge = wrappedX < edgeThreshold || wrappedX > worldW - edgeThreshold ||
+                            wrappedY < edgeThreshold || wrappedY > worldH - edgeThreshold;
+            
+            if (nearEdge) {
+                // Teleport to ghost position (wrapped into world bounds)
+                const ghostWrappedX = ((this.wrapGhost.x % worldW) + worldW) % worldW;
+                const ghostWrappedY = ((this.wrapGhost.y % worldH) + worldH) % worldH;
+                
+                this.player.x = ghostWrappedX;
+                this.player.y = ghostWrappedY;
+                this.player.prevX = ghostWrappedX;
+                this.player.prevY = ghostWrappedY;
+                this.camera.x = ghostWrappedX;
+                this.camera.y = ghostWrappedY;
+                
+                if (this.player.dashTrail) {
+                    this.player.dashTrail = [];
+                }
+            }
+            
+            this.wrapGhost.active = false;
+        }
+    }
+
     // Check if a position is blocked by walls
     isPositionBlocked(x, y, width, height) {
         const halfW = width / 2;
@@ -656,6 +2087,165 @@ class GameScene extends Scene {
         }
         
         return false;
+    }
+    
+    // Start boss fight - lock player in room
+    startBossFight(boss) {
+        this.inBossFight = true;
+        
+        // Set boss on HUD for big health bar
+        this.hud.setBoss(boss);
+        
+        // Find the room the boss is in
+        const bossTileX = Math.floor(boss.x / 32);
+        const bossTileY = Math.floor(boss.y / 32);
+        
+        for (const room of this.dungeon.rooms) {
+            if (bossTileX >= room.x && bossTileX < room.x + room.width &&
+                bossTileY >= room.y && bossTileY < room.y + room.height) {
+                this.bossRoom = room;
+                break;
+            }
+        }
+        
+        // Fallback: if no room found, use the core room (where boss should be)
+        if (!this.bossRoom && this.dungeon.coreRoom) {
+            this.bossRoom = this.dungeon.coreRoom;
+            // Also move boss to room center to ensure it's inside
+            boss.x = (this.bossRoom.x + this.bossRoom.width / 2) * 32;
+            boss.y = (this.bossRoom.y + this.bossRoom.height / 2) * 32;
+        }
+        
+        // If we found a boss room, lock it
+        if (this.bossRoom) {
+            this.bossRoomLocked = true;
+            this.uiManager.addNotification('The room seals behind you!', 'warning');
+            this.camera.shake(10, 0.5);
+            
+            // Spawn stage obstacles for the boss fight
+            this.spawnBossRoomObstacles(this.bossRoom, boss);
+        }
+    }
+    
+    // Spawn obstacles in boss room for tactical gameplay
+    spawnBossRoomObstacles(room, boss) {
+        this.bossObstacles = [];
+        
+        // Get floor theme for obstacle styling
+        const theme = this.currentFloorTheme || 'crypt';
+        
+        // Calculate room center and dimensions
+        const centerX = (room.x + room.width / 2) * 32;
+        const centerY = (room.y + room.height / 2) * 32;
+        const roomW = room.width * 32;
+        const roomH = room.height * 32;
+        
+        // Create 4 pillars in corners for cover
+        const pillarOffset = 80;
+        const pillarPositions = [
+            { x: centerX - roomW/3 + pillarOffset, y: centerY - roomH/3 + pillarOffset },
+            { x: centerX + roomW/3 - pillarOffset, y: centerY - roomH/3 + pillarOffset },
+            { x: centerX - roomW/3 + pillarOffset, y: centerY + roomH/3 - pillarOffset },
+            { x: centerX + roomW/3 - pillarOffset, y: centerY + roomH/3 - pillarOffset },
+        ];
+        
+        for (const pos of pillarPositions) {
+            this.bossObstacles.push({
+                type: 'pillar',
+                x: pos.x,
+                y: pos.y,
+                width: 32,
+                height: 32,
+                health: 100,
+                destructible: true,
+                theme: theme
+            });
+        }
+        
+        // Add themed hazards based on floor type
+        const hazardCount = 2 + Math.floor(Math.random() * 3);
+        for (let i = 0; i < hazardCount; i++) {
+            // Random position within room but not too close to center or edges
+            const angle = (i / hazardCount) * Math.PI * 2 + Math.random() * 0.5;
+            const dist = roomW / 4 + Math.random() * roomW / 6;
+            const hx = centerX + Math.cos(angle) * dist;
+            const hy = centerY + Math.sin(angle) * dist;
+            
+            // Determine hazard type by theme
+            let hazardType = 'fire_pit';
+            let damage = 10;
+            let color = '#ff4400';
+            
+            switch(theme) {
+                case 'crypt':
+                    hazardType = 'grave_spike';
+                    color = '#444';
+                    damage = 15;
+                    break;
+                case 'cavern':
+                    hazardType = 'lava_pool';
+                    color = '#ff3300';
+                    damage = 20;
+                    break;
+                case 'sewer':
+                    hazardType = 'acid_pool';
+                    color = '#44ff44';
+                    damage = 12;
+                    break;
+                case 'fortress':
+                    hazardType = 'spike_trap';
+                    color = '#666';
+                    damage = 18;
+                    break;
+                case 'temple':
+                    hazardType = 'holy_fire';
+                    color = '#ffdd00';
+                    damage = 8;
+                    break;
+                case 'void':
+                    hazardType = 'void_rift';
+                    color = '#8800ff';
+                    damage = 25;
+                    break;
+            }
+            
+            this.bossObstacles.push({
+                type: 'hazard',
+                hazardType: hazardType,
+                x: hx,
+                y: hy,
+                radius: 24 + Math.random() * 16,
+                damage: damage,
+                color: color,
+                pulsePhase: Math.random() * Math.PI * 2,
+                theme: theme
+            });
+        }
+    }
+    
+    // End boss fight - unlock room
+    endBossFight() {
+        this.inBossFight = false;
+        this.bossRoomLocked = false;
+        this.bossRoom = null;
+        this.bossObstacles = []; // Clear obstacles when fight ends
+        this.hud.setBoss(null); // Clear boss health bar
+    }
+    
+    // Constrain entity to boss room bounds
+    constrainToBossRoom(entity) {
+        if (!this.bossRoom) return;
+        
+        const room = this.bossRoom;
+        const margin = 16; // Keep away from walls
+        
+        const minX = room.x * 32 + margin;
+        const maxX = (room.x + room.width) * 32 - margin;
+        const minY = room.y * 32 + margin;
+        const maxY = (room.y + room.height) * 32 - margin;
+        
+        entity.x = Math.max(minX, Math.min(maxX, entity.x));
+        entity.y = Math.max(minY, Math.min(maxY, entity.y));
     }
     
     render(ctx) {
@@ -702,10 +2292,23 @@ class GameScene extends Scene {
             ctx.strokeRect(item.x - 8, item.y - 8 + floatY, 16, 16);
         }
         
+        // Render boss room obstacles
+        if (this.bossObstacles && this.bossObstacles.length > 0) {
+            this.renderBossObstacles(ctx);
+        }
+        
         // Render enemies
         for (const enemy of this.enemies) {
             this.renderEnemy(ctx, enemy);
         }
+        
+        // Render wrap transition ghost (appears before player during transition)
+        if (this.wrapGhost.active) {
+            this.renderWrapGhost(ctx);
+        }
+        
+        // Render player afterimages (behind player)
+        this.renderPlayerAfterimages(ctx);
         
         // Render player
         this.renderPlayer(ctx);
@@ -722,9 +2325,24 @@ class GameScene extends Scene {
         this.hud.render(ctx);
         this.uiManager.renderScreenUI(ctx);
         
+        // Render fullscreen map if toggled
+        if (this.showFullscreenMap && this.dungeon) {
+            this.dungeonRenderer.renderFullscreenMap(
+                ctx, 
+                this.dungeon, 
+                this.player.x, 
+                this.player.y,
+                ctx.canvas.width,
+                ctx.canvas.height
+            );
+        }
+        
         // Render panels
         this.skillTreePanel.render(ctx);
         this.inventoryPanel.render(ctx);
+        
+        // Render pause menu (on top of everything else)
+        this.pauseMenu.render(ctx);
         
         // Floor indicator
         ctx.fillStyle = '#888';
@@ -742,11 +2360,814 @@ class GameScene extends Scene {
             ctx.textAlign = 'left';
         }
         
-        // Controls hint
-        ctx.fillStyle = '#666';
-        ctx.font = '12px Arial';
-        ctx.fillText('WASD: Move | Mouse: Aim | Click: Attack | E: Interact | K: Skills | I: Inventory', 
-            ctx.canvas.width / 2 - 260, ctx.canvas.height - 10);
+        // Controls hint removed per request
+        
+        // Render puzzle UI overlay
+        this.puzzleUI.render(ctx);
+        
+        // Render low health vignette
+        this.renderHealthVignette(ctx);
+        
+        // Render screen combat effects (flash, bloom)
+        this.renderScreenEffects(ctx);
+        
+        // Render level up screen overlay (on top of everything)
+        this.renderLevelUpScreen(ctx);
+        
+        // Render weapon cursor at mouse position
+        this.renderWeaponCursor(ctx);
+    }
+    
+    // Render red vignette when player is low on health
+    renderHealthVignette(ctx) {
+        const healthPercent = this.player.health / this.player.maxHealth;
+        
+        if (healthPercent < 0.4) {
+            const intensity = 1 - (healthPercent / 0.4); // 0 at 40%, 1 at 0%
+            const pulse = 0.7 + Math.sin(Date.now() * 0.005) * 0.3;
+            const alpha = intensity * 0.5 * pulse;
+            
+            // Create radial gradient from transparent center to red edges
+            const gradient = ctx.createRadialGradient(
+                ctx.canvas.width / 2, ctx.canvas.height / 2, ctx.canvas.width * 0.2,
+                ctx.canvas.width / 2, ctx.canvas.height / 2, ctx.canvas.width * 0.7
+            );
+            gradient.addColorStop(0, 'rgba(255, 0, 0, 0)');
+            gradient.addColorStop(0.5, `rgba(255, 0, 0, ${alpha * 0.3})`);
+            gradient.addColorStop(1, `rgba(180, 0, 0, ${alpha})`);
+            
+            ctx.fillStyle = gradient;
+            ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+            
+            // Add pulsing border for critical health
+            if (healthPercent < 0.2) {
+                ctx.strokeStyle = `rgba(255, 0, 0, ${alpha})`;
+                ctx.lineWidth = 8 + Math.sin(Date.now() * 0.01) * 4;
+                ctx.strokeRect(4, 4, ctx.canvas.width - 8, ctx.canvas.height - 8);
+            }
+        }
+    }
+    
+    // Trigger a screen flash effect (for big hits, kills, etc.)
+    triggerScreenFlash(color = '#fff', intensity = 0.3, duration = 0.1) {
+        // Check if screen flash is enabled in settings
+        if (!this.visualSettings.screenFlash) return;
+        // Clamp intensity and duration for performance
+        intensity = Math.min(intensity, 0.4);
+        duration = Math.max(duration, 0.05);
+        this.screenEffects.flashColor = color;
+        this.screenEffects.flashAlpha = intensity;
+        this.screenEffects.flashDecay = intensity / duration;
+    }
+    
+    // Return to main menu (called from pause menu)
+    returnToMainMenu() {
+        this.quitToMenu = true;
+        // Stop music
+        if (this.soundManager) {
+            this.soundManager.stopMusic();
+        }
+    }
+    
+    // Trigger hit freeze (brief pause for impact)
+    triggerHitFreeze(duration = 0.03) {
+        // Check if hit freeze is enabled in settings
+        if (!this.visualSettings.hitFreeze) return;
+        this.screenEffects.hitFreeze = duration;
+    }
+    
+    // Trigger screen shake (respects settings)
+    triggerScreenShake(intensity, duration) {
+        if (!this.visualSettings.screenShake) return;
+        this.camera.shake(intensity, duration);
+    }
+    
+    // Trigger bloom effect
+    triggerBloom(intensity = 0.3, duration = 0.2) {
+        this.screenEffects.bloomIntensity = intensity;
+        this.screenEffects.bloomDecay = intensity / duration;
+    }
+    
+    // Update screen effects
+    updateScreenEffects(dt) {
+        // Decay flash
+        if (this.screenEffects.flashAlpha > 0) {
+            this.screenEffects.flashAlpha -= this.screenEffects.flashDecay * dt;
+            if (this.screenEffects.flashAlpha < 0) this.screenEffects.flashAlpha = 0;
+        }
+        
+        // Decay bloom
+        if (this.screenEffects.bloomIntensity > 0) {
+            this.screenEffects.bloomIntensity -= this.screenEffects.bloomDecay * dt;
+            if (this.screenEffects.bloomIntensity < 0) this.screenEffects.bloomIntensity = 0;
+        }
+        
+        // Hit freeze (returns true if should pause game) - skip if disabled
+        if (this.screenEffects.hitFreeze > 0 && this.visualSettings.hitFreeze) {
+            this.screenEffects.hitFreeze -= dt;
+            // Only freeze for very short durations to avoid perceived lag
+            if (this.screenEffects.hitFreeze > 0.05) {
+                this.screenEffects.hitFreeze = 0.05; // Cap at 50ms
+            }
+            return true; // Pause update while in hit freeze
+        }
+        this.screenEffects.hitFreeze = 0;
+        return false;
+    }
+    
+    // Level up screen - allows player to allocate stat points
+    updateLevelUpScreen() {
+        const canvas = this.engine.canvas;
+        const stats = ['strength', 'agility', 'intelligence', 'vitality', 'luck'];
+        
+        // Handle number key presses for stat allocation
+        if (this.engine.wasKeyJustPressed('Digit1') || this.engine.wasKeyJustPressed('Numpad1')) {
+            this.player.allocateStat('strength');
+            this.soundManager.playCoin?.();
+        }
+        if (this.engine.wasKeyJustPressed('Digit2') || this.engine.wasKeyJustPressed('Numpad2')) {
+            this.player.allocateStat('agility');
+            this.soundManager.playCoin?.();
+        }
+        if (this.engine.wasKeyJustPressed('Digit3') || this.engine.wasKeyJustPressed('Numpad3')) {
+            this.player.allocateStat('intelligence');
+            this.soundManager.playCoin?.();
+        }
+        if (this.engine.wasKeyJustPressed('Digit4') || this.engine.wasKeyJustPressed('Numpad4')) {
+            this.player.allocateStat('vitality');
+            this.soundManager.playCoin?.();
+        }
+        if (this.engine.wasKeyJustPressed('Digit5') || this.engine.wasKeyJustPressed('Numpad5')) {
+            this.player.allocateStat('luck');
+            this.soundManager.playCoin?.();
+        }
+        
+        // Close level up screen when all stat points are spent or Enter/Space pressed
+        if (this.player.statPoints <= 0 || 
+            this.engine.wasKeyJustPressed('Enter') || 
+            this.engine.wasKeyJustPressed('Space')) {
+            if (this.player.statPoints <= 0) {
+                this.levelUpScreenActive = false;
+                this.player.showLevelUpScreen = false;
+            }
+        }
+        
+        // Allow early exit with Escape (skip remaining points)
+        if (this.engine.wasKeyJustPressed('Escape')) {
+            this.levelUpScreenActive = false;
+            this.player.showLevelUpScreen = false;
+        }
+    }
+    
+    // Render level up screen overlay
+    renderLevelUpScreen(ctx) {
+        if (!this.levelUpScreenActive) return;
+        
+        const canvas = ctx.canvas;
+        const centerX = canvas.width / 2;
+        const centerY = canvas.height / 2;
+        
+        // Darken background
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        
+        // Panel
+        const panelWidth = 450;
+        const panelHeight = 400;
+        const panelX = centerX - panelWidth / 2;
+        const panelY = centerY - panelHeight / 2;
+        
+        // Panel background
+        ctx.fillStyle = 'rgba(30, 30, 50, 0.95)';
+        ctx.fillRect(panelX, panelY, panelWidth, panelHeight);
+        ctx.strokeStyle = '#ffcc00';
+        ctx.lineWidth = 3;
+        ctx.strokeRect(panelX, panelY, panelWidth, panelHeight);
+        
+        // Title
+        ctx.fillStyle = '#ffcc00';
+        ctx.font = 'bold 28px Arial';
+        ctx.textAlign = 'center';
+        ctx.fillText(`LEVEL UP! Level ${this.player.level}`, centerX, panelY + 45);
+        
+        // Stat points remaining
+        ctx.fillStyle = '#88ff88';
+        ctx.font = '20px Arial';
+        ctx.fillText(`Stat Points: ${this.player.statPoints}`, centerX, panelY + 80);
+        
+        // Stats list
+        const stats = [
+            { key: 'strength', name: 'Strength', desc: '+2 Attack Damage', color: '#ff6666' },
+            { key: 'agility', name: 'Agility', desc: '+2 Speed, +2 Stamina', color: '#66ff66' },
+            { key: 'intelligence', name: 'Intelligence', desc: '+3 Magic Damage, +5 Mana', color: '#6666ff' },
+            { key: 'vitality', name: 'Vitality', desc: '+10 HP, +1 Defense', color: '#ffff66' },
+            { key: 'luck', name: 'Luck', desc: '+0.5% Crit Chance', color: '#ff66ff' }
+        ];
+        
+        const startY = panelY + 120;
+        const lineHeight = 50;
+        
+        ctx.textAlign = 'left';
+        stats.forEach((stat, i) => {
+            const y = startY + i * lineHeight;
+            const value = Math.floor(this.player.stats[stat.key]);
+            
+            // Key number
+            ctx.fillStyle = '#ffffff';
+            ctx.font = 'bold 18px Arial';
+            ctx.fillText(`[${i + 1}]`, panelX + 20, y);
+            
+            // Stat name
+            ctx.fillStyle = stat.color;
+            ctx.font = 'bold 18px Arial';
+            ctx.fillText(stat.name, panelX + 60, y);
+            
+            // Current value
+            ctx.fillStyle = '#ffffff';
+            ctx.font = '18px Arial';
+            ctx.fillText(`${value}`, panelX + 200, y);
+            
+            // Description
+            ctx.fillStyle = '#aaaaaa';
+            ctx.font = '14px Arial';
+            ctx.fillText(stat.desc, panelX + 250, y);
+        });
+        
+        // Instructions
+        ctx.textAlign = 'center';
+        ctx.fillStyle = '#888888';
+        ctx.font = '14px Arial';
+        ctx.fillText('Press 1-5 to allocate points', centerX, panelY + panelHeight - 50);
+        ctx.fillText('Press ESC to skip remaining points', centerX, panelY + panelHeight - 30);
+        
+        // Also show skill points available
+        if (this.player.skillPoints > 0) {
+            ctx.fillStyle = '#aaffaa';
+            ctx.font = '16px Arial';
+            ctx.fillText(`Skill Points: ${this.player.skillPoints} (Press K to open skill tree)`, centerX, panelY + panelHeight - 10);
+        }
+    }
+    
+    // Render screen combat effects
+    renderScreenEffects(ctx) {
+        const se = this.screenEffects;
+        
+        // Screen flash overlay
+        if (se.flashAlpha > 0 && se.flashColor) {
+            ctx.globalAlpha = se.flashAlpha;
+            ctx.fillStyle = se.flashColor;
+            ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+            ctx.globalAlpha = 1;
+        }
+        
+        // Bloom/glow effect (radial glow from center)
+        if (se.bloomIntensity > 0) {
+            const gradient = ctx.createRadialGradient(
+                ctx.canvas.width / 2, ctx.canvas.height / 2, 0,
+                ctx.canvas.width / 2, ctx.canvas.height / 2, ctx.canvas.width * 0.6
+            );
+            gradient.addColorStop(0, `rgba(255, 255, 255, ${se.bloomIntensity * 0.5})`);
+            gradient.addColorStop(0.5, `rgba(255, 255, 200, ${se.bloomIntensity * 0.2})`);
+            gradient.addColorStop(1, 'rgba(255, 255, 255, 0)');
+            
+            ctx.globalCompositeOperation = 'lighter';
+            ctx.fillStyle = gradient;
+            ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+            ctx.globalCompositeOperation = 'source-over';
+        }
+    }
+    
+    // Update and spawn player afterimages
+    updatePlayerAfterimages(dt) {
+        const p = this.player;
+        
+        // Spawn afterimages when attacking or dashing
+        const isAttacking = p.attackCooldown > 0;
+        const isDashing = p.isDashing;
+        const isMovingFast = Math.sqrt(p.velocity.x**2 + p.velocity.y**2) > 150;
+        
+        if (isAttacking || isDashing || isMovingFast) {
+            this.afterimageTimer += dt;
+            // Spawn afterimage every 0.03 seconds during action
+            if (this.afterimageTimer >= 0.03) {
+                this.afterimageTimer = 0;
+                this.playerAfterimages.push({
+                    x: p.x,
+                    y: p.y,
+                    width: p.width,
+                    height: p.height,
+                    alpha: 0.6,
+                    lifetime: 0.3,
+                    color: ClassDefinitions[this.selectedClass]?.color || '#4488ff',
+                    facingX: p.facingX || 1
+                });
+            }
+        }
+        
+        // Update existing afterimages
+        for (let i = this.playerAfterimages.length - 1; i >= 0; i--) {
+            const img = this.playerAfterimages[i];
+            img.lifetime -= dt;
+            img.alpha = (img.lifetime / 0.3) * 0.6;
+            
+            if (img.lifetime <= 0) {
+                this.playerAfterimages.splice(i, 1);
+            }
+        }
+    }
+    
+    // Render player afterimages (called before player render)
+    renderPlayerAfterimages(ctx) {
+        for (const img of this.playerAfterimages) {
+            // Use world coordinates directly - camera transform is already applied
+            ctx.save();
+            ctx.globalAlpha = img.alpha;
+            ctx.translate(img.x, img.y);
+            ctx.scale(img.facingX, 1);
+            
+            // Ghost body with glow
+            ctx.shadowColor = img.color;
+            ctx.shadowBlur = 10;
+            ctx.fillStyle = img.color;
+            ctx.globalAlpha = img.alpha * 0.5;
+            ctx.fillRect(-img.width/2, -img.height/2, img.width, img.height);
+            
+            // Outline
+            ctx.strokeStyle = '#fff';
+            ctx.lineWidth = 1;
+            ctx.globalAlpha = img.alpha * 0.3;
+            ctx.strokeRect(-img.width/2, -img.height/2, img.width, img.height);
+            
+            ctx.restore();
+        }
+    }
+    
+    // Render the equipped weapon at the mouse cursor position
+    renderWeaponCursor(ctx) {
+        const mouse = this.engine.getMousePosition();
+        const p = this.player;
+        const weapon = p.equipment?.weapon;
+        const classData = ClassDefinitions[this.selectedClass];
+        
+        // Calculate angle from player to cursor (in screen space)
+        const playerScreen = this.camera.worldToScreen(p.x, p.y);
+        const dx = mouse.x - playerScreen.x;
+        const dy = mouse.y - playerScreen.y;
+        const angle = Math.atan2(dy, dx);
+        
+        const isAttacking = p.attackCooldown > 0;
+        const swingPhase = isAttacking ? (p.attackCooldown / 0.5) * Math.PI : 0;
+        
+        ctx.save();
+        ctx.translate(mouse.x, mouse.y);
+        ctx.rotate(angle);
+        
+        // Swing animation
+        if (isAttacking) {
+            ctx.rotate(-swingPhase + Math.PI / 4);
+        }
+        
+        const weaponType = weapon?.type || classData.weaponTypes?.[0] || 'sword';
+        const weaponColor = weapon?.color || '#aaaaaa';
+        
+        // Scale up the weapon for cursor visibility
+        ctx.scale(1.2, 1.2);
+        
+        // Draw weapon based on type
+        this.drawWeaponShape(ctx, weaponType, weaponColor, classData, isAttacking);
+        
+        ctx.restore();
+        
+        // Draw small crosshair at exact cursor point
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.6)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(mouse.x - 4, mouse.y);
+        ctx.lineTo(mouse.x + 4, mouse.y);
+        ctx.moveTo(mouse.x, mouse.y - 4);
+        ctx.lineTo(mouse.x, mouse.y + 4);
+        ctx.stroke();
+    }
+    
+    // Shared weapon drawing function
+    drawWeaponShape(ctx, weaponType, weaponColor, classData, isAttacking) {
+        switch (weaponType) {
+            case 'sword':
+            case 'enchanted_sword':
+                ctx.fillStyle = '#c0c0c0';
+                ctx.beginPath();
+                ctx.moveTo(0, -2);
+                ctx.lineTo(22, -3);
+                ctx.lineTo(25, 0);
+                ctx.lineTo(22, 3);
+                ctx.lineTo(0, 2);
+                ctx.closePath();
+                ctx.fill();
+                ctx.strokeStyle = '#ffffff';
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                ctx.moveTo(2, -1);
+                ctx.lineTo(22, -2);
+                ctx.stroke();
+                ctx.fillStyle = '#8b4513';
+                ctx.fillRect(-2, -5, 4, 10);
+                ctx.fillStyle = '#4a3520';
+                ctx.fillRect(-8, -2, 6, 4);
+                ctx.fillStyle = weaponColor;
+                ctx.beginPath();
+                ctx.arc(-9, 0, 3, 0, Math.PI * 2);
+                ctx.fill();
+                break;
+                
+            case 'katana':
+                ctx.strokeStyle = '#e8e8e8';
+                ctx.lineWidth = 3;
+                ctx.beginPath();
+                ctx.moveTo(0, 0);
+                ctx.quadraticCurveTo(15, -4, 28, -2);
+                ctx.stroke();
+                ctx.strokeStyle = '#ffffff';
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                ctx.moveTo(2, -1);
+                ctx.quadraticCurveTo(15, -5, 27, -3);
+                ctx.stroke();
+                ctx.fillStyle = '#2a2a2a';
+                ctx.beginPath();
+                ctx.ellipse(-1, 0, 4, 6, 0, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.fillStyle = '#1a1a2a';
+                ctx.fillRect(-12, -2, 11, 4);
+                for (let i = 0; i < 3; i++) {
+                    ctx.fillStyle = '#daa520';
+                    ctx.fillRect(-11 + i * 4, -2, 2, 4);
+                }
+                break;
+                
+            case 'axe':
+            case 'runic_axe':
+                ctx.fillStyle = '#5a4030';
+                ctx.fillRect(-4, -2, 20, 4);
+                ctx.fillStyle = '#707070';
+                ctx.beginPath();
+                ctx.moveTo(14, -2);
+                ctx.lineTo(22, -10);
+                ctx.lineTo(26, -8);
+                ctx.lineTo(22, 0);
+                ctx.lineTo(26, 8);
+                ctx.lineTo(22, 10);
+                ctx.lineTo(14, 2);
+                ctx.closePath();
+                ctx.fill();
+                ctx.strokeStyle = '#a0a0a0';
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                ctx.moveTo(22, -9);
+                ctx.lineTo(25, 0);
+                ctx.lineTo(22, 9);
+                ctx.stroke();
+                break;
+                
+            case 'staff':
+                ctx.fillStyle = '#5a4030';
+                ctx.fillRect(-10, -2, 32, 4);
+                ctx.fillStyle = '#8b4513';
+                ctx.beginPath();
+                ctx.arc(24, 0, 6, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.fillStyle = classData?.color || '#9370db';
+                ctx.beginPath();
+                ctx.arc(24, 0, 4, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.fillStyle = `rgba(200, 150, 255, ${0.3 + Math.sin(Date.now() / 200) * 0.2})`;
+                ctx.beginPath();
+                ctx.arc(24, 0, 6, 0, Math.PI * 2);
+                ctx.fill();
+                break;
+                
+            case 'wand':
+                ctx.fillStyle = '#3a3a3a';
+                ctx.fillRect(-4, -1.5, 22, 3);
+                ctx.fillStyle = classData?.color || '#9370db';
+                ctx.beginPath();
+                ctx.moveTo(18, 0);
+                ctx.lineTo(22, -4);
+                ctx.lineTo(26, 0);
+                ctx.lineTo(22, 4);
+                ctx.closePath();
+                ctx.fill();
+                ctx.fillStyle = `rgba(200, 150, 255, ${0.4 + Math.sin(Date.now() / 150) * 0.3})`;
+                ctx.beginPath();
+                ctx.arc(22, 0, 5, 0, Math.PI * 2);
+                ctx.fill();
+                break;
+                
+            case 'bow':
+                ctx.strokeStyle = '#888';
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                ctx.moveTo(0, -18);
+                ctx.lineTo(8, 0);
+                ctx.lineTo(0, 18);
+                ctx.stroke();
+                ctx.strokeStyle = '#5a4030';
+                ctx.lineWidth = 3;
+                ctx.beginPath();
+                ctx.moveTo(0, -18);
+                ctx.quadraticCurveTo(-8, 0, 0, 18);
+                ctx.stroke();
+                if (!isAttacking) {
+                    ctx.fillStyle = '#4a3a2a';
+                    ctx.fillRect(6, -1, 16, 2);
+                    ctx.fillStyle = '#808080';
+                    ctx.beginPath();
+                    ctx.moveTo(22, 0);
+                    ctx.lineTo(18, -3);
+                    ctx.lineTo(18, 3);
+                    ctx.closePath();
+                    ctx.fill();
+                }
+                break;
+                
+            case 'scythe':
+                ctx.fillStyle = '#3a3a3a';
+                ctx.fillRect(-8, -2, 30, 4);
+                ctx.fillStyle = '#606060';
+                ctx.beginPath();
+                ctx.moveTo(20, -2);
+                ctx.quadraticCurveTo(30, -15, 18, -20);
+                ctx.lineTo(16, -18);
+                ctx.quadraticCurveTo(26, -12, 20, 2);
+                ctx.closePath();
+                ctx.fill();
+                ctx.strokeStyle = '#a0a0a0';
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                ctx.moveTo(20, -3);
+                ctx.quadraticCurveTo(29, -14, 18, -19);
+                ctx.stroke();
+                break;
+                
+            case 'dagger':
+                ctx.fillStyle = '#c0c0c0';
+                ctx.beginPath();
+                ctx.moveTo(0, -1.5);
+                ctx.lineTo(14, -2);
+                ctx.lineTo(16, 0);
+                ctx.lineTo(14, 2);
+                ctx.lineTo(0, 1.5);
+                ctx.closePath();
+                ctx.fill();
+                ctx.fillStyle = '#4a3520';
+                ctx.fillRect(-6, -2, 6, 4);
+                break;
+                
+            case 'kunai':
+                ctx.fillStyle = '#4a4a4a';
+                ctx.beginPath();
+                ctx.moveTo(0, 0);
+                ctx.lineTo(16, -4);
+                ctx.lineTo(20, 0);
+                ctx.lineTo(16, 4);
+                ctx.closePath();
+                ctx.fill();
+                ctx.strokeStyle = '#808080';
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                ctx.moveTo(2, 0);
+                ctx.lineTo(18, -3);
+                ctx.stroke();
+                ctx.strokeStyle = '#3a3a3a';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.arc(-6, 0, 5, 0, Math.PI * 2);
+                ctx.stroke();
+                ctx.fillStyle = '#2a2020';
+                ctx.fillRect(-3, -2, 4, 4);
+                break;
+                
+            case 'lance':
+            case 'magic_lance':
+                ctx.fillStyle = '#4a3a2a';
+                ctx.fillRect(-8, -2, 35, 4);
+                ctx.fillStyle = '#808080';
+                ctx.beginPath();
+                ctx.moveTo(27, 0);
+                ctx.lineTo(35, 0);
+                ctx.lineTo(27, -5);
+                ctx.moveTo(27, 0);
+                ctx.lineTo(27, 5);
+                ctx.closePath();
+                ctx.fill();
+                ctx.fillStyle = '#5a5a5a';
+                ctx.fillRect(24, -4, 3, 8);
+                break;
+                
+            case 'hammer':
+            case 'mace':
+                ctx.fillStyle = '#5a4030';
+                ctx.fillRect(-4, -2, 18, 4);
+                ctx.fillStyle = '#606060';
+                ctx.fillRect(12, -8, 10, 16);
+                ctx.fillStyle = '#404040';
+                ctx.beginPath();
+                ctx.arc(17, -6, 2, 0, Math.PI * 2);
+                ctx.arc(17, 6, 2, 0, Math.PI * 2);
+                ctx.fill();
+                break;
+                
+            case 'musket':
+                ctx.fillStyle = '#3a3a3a';
+                ctx.fillRect(0, -2.5, 35, 5);
+                ctx.fillStyle = '#c0a030';
+                ctx.fillRect(8, -3, 3, 6);
+                ctx.fillRect(20, -3, 3, 6);
+                ctx.fillStyle = '#2a2a2a';
+                ctx.beginPath();
+                ctx.arc(35, 0, 3, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.fillStyle = '#6b4423';
+                ctx.beginPath();
+                ctx.moveTo(0, -3);
+                ctx.lineTo(-8, -4);
+                ctx.quadraticCurveTo(-14, -2, -16, 4);
+                ctx.lineTo(-14, 8);
+                ctx.lineTo(-6, 6);
+                ctx.lineTo(0, 3);
+                ctx.closePath();
+                ctx.fill();
+                break;
+                
+            case 'crossbow':
+                ctx.fillStyle = '#404040';
+                ctx.fillRect(0, -2, 28, 4);
+                ctx.fillStyle = '#5a4030';
+                ctx.beginPath();
+                ctx.moveTo(0, -3);
+                ctx.lineTo(-12, -5);
+                ctx.lineTo(-12, 5);
+                ctx.lineTo(0, 3);
+                ctx.closePath();
+                ctx.fill();
+                ctx.strokeStyle = '#4a3a2a';
+                ctx.lineWidth = 3;
+                ctx.beginPath();
+                ctx.moveTo(20, 0);
+                ctx.lineTo(20, -12);
+                ctx.moveTo(20, 0);
+                ctx.lineTo(20, 12);
+                ctx.stroke();
+                ctx.strokeStyle = '#888';
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                ctx.moveTo(20, -12);
+                ctx.lineTo(8, 0);
+                ctx.lineTo(20, 12);
+                ctx.stroke();
+                break;
+                
+            default:
+                ctx.fillStyle = weaponColor;
+                ctx.fillRect(0, -2, 18, 4);
+                break;
+        }
+    }
+    
+    // Render boss room obstacles
+    renderBossObstacles(ctx) {
+        const time = Date.now() / 1000;
+        
+        for (const obstacle of this.bossObstacles) {
+            if (obstacle.type === 'pillar') {
+                // Render pillar
+                const hw = obstacle.width / 2;
+                const hh = obstacle.height / 2;
+                
+                // Shadow
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.4)';
+                ctx.beginPath();
+                ctx.ellipse(obstacle.x, obstacle.y + hh + 4, hw + 4, 8, 0, 0, Math.PI * 2);
+                ctx.fill();
+                
+                // Pillar base
+                ctx.fillStyle = '#4a4a4a';
+                ctx.fillRect(obstacle.x - hw - 4, obstacle.y + hh - 8, obstacle.width + 8, 12);
+                
+                // Pillar body
+                ctx.fillStyle = '#666';
+                ctx.fillRect(obstacle.x - hw, obstacle.y - hh, obstacle.width, obstacle.height);
+                
+                // Pillar highlight
+                ctx.fillStyle = '#888';
+                ctx.fillRect(obstacle.x - hw + 4, obstacle.y - hh + 4, 6, obstacle.height - 8);
+                
+                // Pillar top
+                ctx.fillStyle = '#555';
+                ctx.fillRect(obstacle.x - hw - 4, obstacle.y - hh - 8, obstacle.width + 8, 10);
+                
+                // Damage cracks if destructible and damaged
+                if (obstacle.destructible && obstacle.health < 100) {
+                    ctx.strokeStyle = '#333';
+                    ctx.lineWidth = 2;
+                    const crackAmount = 1 - obstacle.health / 100;
+                    for (let i = 0; i < Math.floor(crackAmount * 5); i++) {
+                        ctx.beginPath();
+                        const cx = obstacle.x - hw + Math.random() * obstacle.width;
+                        const cy = obstacle.y - hh + Math.random() * obstacle.height;
+                        ctx.moveTo(cx, cy);
+                        ctx.lineTo(cx + (Math.random() - 0.5) * 15, cy + Math.random() * 10);
+                        ctx.stroke();
+                    }
+                }
+            } else if (obstacle.type === 'hazard') {
+                // Render hazard based on type
+                const pulse = 0.7 + Math.sin(time * 3 + obstacle.pulsePhase) * 0.3;
+                const baseColor = obstacle.color;
+                
+                // Glow effect
+                ctx.save();
+                ctx.globalAlpha = 0.3 * pulse;
+                ctx.fillStyle = baseColor;
+                ctx.beginPath();
+                ctx.arc(obstacle.x, obstacle.y, obstacle.radius * 1.5, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.restore();
+                
+                // Main hazard
+                ctx.fillStyle = baseColor;
+                ctx.globalAlpha = 0.8;
+                ctx.beginPath();
+                ctx.arc(obstacle.x, obstacle.y, obstacle.radius * pulse, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.globalAlpha = 1;
+                
+                // Inner detail
+                ctx.fillStyle = this.lightenColor(baseColor, 30);
+                ctx.beginPath();
+                ctx.arc(obstacle.x, obstacle.y, obstacle.radius * 0.6 * pulse, 0, Math.PI * 2);
+                ctx.fill();
+                
+                // Animated particles
+                for (let i = 0; i < 4; i++) {
+                    const angle = (time * 2 + i * Math.PI / 2 + obstacle.pulsePhase) % (Math.PI * 2);
+                    const dist = obstacle.radius * 0.8;
+                    const px = obstacle.x + Math.cos(angle) * dist;
+                    const py = obstacle.y + Math.sin(angle) * dist;
+                    
+                    ctx.fillStyle = baseColor;
+                    ctx.globalAlpha = 0.6 + Math.sin(time * 4 + i) * 0.4;
+                    ctx.beginPath();
+                    ctx.arc(px, py, 3, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+                ctx.globalAlpha = 1;
+            }
+        }
+    }
+    
+    // Render ghost at equivalent position on other side of map
+    renderWrapGhost(ctx) {
+        const ghost = this.wrapGhost;
+        const p = this.player;
+        
+        // Ghost alpha increases as timer progresses
+        const alpha = Math.min(0.8, ghost.timer / ghost.delay);
+        
+        ctx.save();
+        ctx.globalAlpha = alpha;
+        
+        const classData = ClassDefinitions[this.selectedClass];
+        const baseColor = classData.color || '#4488ff';
+        
+        // Ethereal glow effect
+        ctx.shadowColor = '#88ccff';
+        ctx.shadowBlur = 15 + Math.sin(Date.now() / 100) * 5;
+        
+        // Draw ghost body at ghost position (mirrors player on other side)
+        ctx.fillStyle = baseColor;
+        ctx.fillRect(ghost.x - p.width/2, ghost.y - p.height/2, p.width, p.height);
+        
+        // Glowing outline
+        ctx.strokeStyle = '#aaddff';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(ghost.x - p.width/2, ghost.y - p.height/2, p.width, p.height);
+        
+        // Particles around ghost
+        const particleCount = 6;
+        for (let i = 0; i < particleCount; i++) {
+            const angle = (i / particleCount) * Math.PI * 2 + Date.now() / 500;
+            const dist = 12 + Math.sin(Date.now() / 200 + i) * 4;
+            const px = ghost.x + Math.cos(angle) * dist;
+            const py = ghost.y + Math.sin(angle) * dist;
+            
+            ctx.globalAlpha = alpha * 0.6;
+            ctx.fillStyle = '#88ccff';
+            ctx.beginPath();
+            ctx.arc(px, py, 2.5, 0, Math.PI * 2);
+            ctx.fill();
+        }
+        
+        ctx.restore();
     }
     
     renderPlayer(ctx) {
@@ -757,7 +3178,24 @@ class GameScene extends Scene {
         const speed = Math.sqrt(p.velocity.x ** 2 + p.velocity.y ** 2);
         const isMoving = speed > 10;
         const bobOffset = isMoving ? Math.sin(time * 12) * 3 : Math.sin(time * 2) * 1;
-        const squashStretch = isMoving ? 1 + Math.sin(time * 12) * 0.1 : 1;
+        let squashStretch = isMoving ? 1 + Math.sin(time * 12) * 0.1 : 1;
+        
+        // Dash stretch - elongate in direction of dash
+        let dashStretchX = 1;
+        let dashStretchY = 1;
+        let dashRotation = 0;
+        if (p.isDashing && p.dashDirX !== undefined && p.dashDirY !== undefined) {
+            // Calculate stretch factor based on dash direction
+            const dashStretchAmount = 1.6; // How much to stretch during dash
+            const dashSquashAmount = 0.7; // How much to squash perpendicular to dash
+            
+            // Calculate the dash angle
+            dashRotation = Math.atan2(p.dashDirY, p.dashDirX);
+            
+            // Apply stretch in dash direction, squash perpendicular
+            dashStretchX = dashStretchAmount;
+            dashStretchY = dashSquashAmount;
+        }
         
         // Render dash trail (ghost images)
         if (p.dashTrail && p.dashTrail.length > 0) {
@@ -799,51 +3237,115 @@ class GameScene extends Scene {
             ctx.restore();
         }
         
-        // Shadow (animated with movement)
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
-        ctx.beginPath();
-        const shadowScale = isMoving ? 0.9 + Math.sin(time * 12) * 0.1 : 1;
-        ctx.ellipse(p.x, p.y + p.height/2 + 2, p.width/2 * shadowScale, p.height/4, 0, 0, Math.PI * 2);
-        ctx.fill();
+        // Shadow - check for wall below to prevent overlap
+        const shadowY = p.y + p.height/2 + 2;
+        const tileBelow = this.dungeon ? this.dungeon.getTile(
+            Math.floor(p.x / 32),
+            Math.floor((shadowY + 8) / 32)
+        ) : 1;
+        
+        // Only draw shadow if not overlapping a wall tile below
+        if (tileBelow !== TILE_TYPES.WALL && tileBelow !== TILE_TYPES.VOID) {
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
+            ctx.beginPath();
+            const shadowScale = isMoving ? 0.9 + Math.sin(time * 12) * 0.1 : 1;
+            ctx.ellipse(p.x, shadowY, p.width/2 * shadowScale, p.height/4, 0, 0, Math.PI * 2);
+            ctx.fill();
+        } else {
+            // Draw truncated shadow that stops at wall edge
+            const wallTileY = Math.floor((shadowY + 8) / 32);
+            const wallEdgeY = wallTileY * 32;
+            const maxShadowY = Math.min(shadowY, wallEdgeY - 2);
+            
+            if (maxShadowY > p.y) {
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.2)';
+                ctx.beginPath();
+                const shadowScale = isMoving ? 0.9 + Math.sin(time * 12) * 0.1 : 1;
+                const truncatedHeight = Math.max(1, (maxShadowY - p.y) / (p.height/4 + 2));
+                ctx.ellipse(p.x, p.y + p.height/2 + 1, p.width/2 * shadowScale * 0.8, truncatedHeight, 0, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
         
         ctx.save();
         ctx.translate(p.x, p.y + bobOffset);
         
-        // Body with squash/stretch
+        // Apply dash rotation and stretch
+        if (p.isDashing && dashRotation !== 0) {
+            ctx.rotate(dashRotation);
+        }
+        
+        // Body with squash/stretch and dash stretch
         const classData = ClassDefinitions[this.selectedClass];
         const baseColor = classData.color || '#4488ff';
         
-        // Draw body (animated)
+        // Draw body (animated) - apply dash stretch
         ctx.fillStyle = baseColor;
-        const bodyW = p.width * (2 - squashStretch);
-        const bodyH = p.height * squashStretch;
-        ctx.fillRect(-bodyW/2, -bodyH/2, bodyW, bodyH);
+        const baseBodyW = p.width * (2 - squashStretch);
+        const baseBodyH = p.height * squashStretch;
+        const bodyW = baseBodyW * dashStretchX;
+        const bodyH = baseBodyH * dashStretchY;
         
-        // Inner body detail
-        ctx.fillStyle = this.lightenColor(baseColor, 20);
-        ctx.fillRect(-bodyW/2 + 4, -bodyH/2 + 4, bodyW - 8, bodyH/2 - 4);
+        // Rounded rectangle for stretched dash look
+        if (p.isDashing) {
+            // Draw elongated pill shape during dash
+            ctx.beginPath();
+            const radius = bodyH / 2;
+            ctx.moveTo(-bodyW/2 + radius, -bodyH/2);
+            ctx.lineTo(bodyW/2 - radius, -bodyH/2);
+            ctx.arc(bodyW/2 - radius, 0, radius, -Math.PI/2, Math.PI/2);
+            ctx.lineTo(-bodyW/2 + radius, bodyH/2);
+            ctx.arc(-bodyW/2 + radius, 0, radius, Math.PI/2, -Math.PI/2);
+            ctx.closePath();
+            ctx.fill();
+            
+            // Dash glow effect
+            ctx.shadowColor = '#88ccff';
+            ctx.shadowBlur = 15;
+            ctx.strokeStyle = '#aaddff';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+            ctx.shadowBlur = 0;
+        } else {
+            ctx.fillRect(-bodyW/2, -bodyH/2, bodyW, bodyH);
+        }
         
-        // Eyes (follow mouse direction)
-        const eyeOffsetX = p.facingX * 3;
-        const eyeOffsetY = p.facingY * 2;
-        ctx.fillStyle = '#fff';
-        ctx.fillRect(-6 + eyeOffsetX, -4 + eyeOffsetY, 5, 5);
-        ctx.fillRect(1 + eyeOffsetX, -4 + eyeOffsetY, 5, 5);
-        ctx.fillStyle = '#000';
-        ctx.fillRect(-5 + eyeOffsetX + p.facingX * 2, -3 + eyeOffsetY, 3, 3);
-        ctx.fillRect(2 + eyeOffsetX + p.facingX * 2, -3 + eyeOffsetY, 3, 3);
+        // Inner body detail (only when not dashing for clarity)
+        if (!p.isDashing) {
+            ctx.fillStyle = this.lightenColor(baseColor, 20);
+            ctx.fillRect(-bodyW/2 + 4, -bodyH/2 + 4, bodyW - 8, bodyH/2 - 4);
+        }
         
-        // Weapon indicator based on attack cooldown
-        if (p.attackCooldown > 0) {
-            ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
-            const swingAngle = (p.attackCooldown / 0.5) * Math.PI;
-            ctx.save();
-            ctx.rotate(Math.atan2(p.facingY, p.facingX) - swingAngle);
-            ctx.fillRect(10, -2, 15, 4);
-            ctx.restore();
+        // Eyes (follow mouse direction) - hide during dash for speed effect
+        if (!p.isDashing) {
+            const eyeOffsetX = p.facingX * 3;
+            const eyeOffsetY = p.facingY * 2;
+            ctx.fillStyle = '#fff';
+            ctx.fillRect(-6 + eyeOffsetX, -4 + eyeOffsetY, 5, 5);
+            ctx.fillRect(1 + eyeOffsetX, -4 + eyeOffsetY, 5, 5);
+            ctx.fillStyle = '#000';
+            ctx.fillRect(-5 + eyeOffsetX + p.facingX * 2, -3 + eyeOffsetY, 3, 3);
+            ctx.fillRect(2 + eyeOffsetX + p.facingX * 2, -3 + eyeOffsetY, 3, 3);
+        } else {
+            // Speed lines during dash
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(-bodyW/2 - 5, -2);
+            ctx.lineTo(-bodyW/2 - 15, -2);
+            ctx.moveTo(-bodyW/2 - 5, 2);
+            ctx.lineTo(-bodyW/2 - 12, 2);
+            ctx.stroke();
         }
         
         ctx.restore();
+        
+        // Render class-specific hat/prop (only when not dashing for clarity)
+        if (!p.isDashing) {
+            this.renderPlayerHat(ctx, p, classData, bobOffset);
+        }
+        
+        // Weapon is now only rendered at cursor (renderWeaponCursor), not in hand
         
         // Direction indicator (small arrow)
         ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
@@ -856,19 +3358,6 @@ class GameScene extends Scene {
         ctx.lineTo(arrowX + p.facingY * 4, arrowY - p.facingX * 4);
         ctx.closePath();
         ctx.fill();
-        
-        // Health bar above player
-        const healthPercent = p.health / p.maxHealth;
-        ctx.fillStyle = '#222';
-        ctx.fillRect(p.x - 22, p.y - p.height/2 - 12 + bobOffset, 44, 8);
-        const healthColor = healthPercent > 0.6 ? '#44ff44' : healthPercent > 0.3 ? '#ffaa00' : '#ff4444';
-        ctx.fillStyle = healthColor;
-        ctx.fillRect(p.x - 20, p.y - p.height/2 - 10 + bobOffset, 40 * healthPercent, 4);
-        
-        // Mana bar
-        const manaPercent = p.mana / p.maxMana;
-        ctx.fillStyle = '#4466ff';
-        ctx.fillRect(p.x - 20, p.y - p.height/2 - 5 + bobOffset, 40 * manaPercent, 3);
         
         // Status effect indicators with pulse
         let effectIndex = 0;
@@ -895,6 +3384,641 @@ class GameScene extends Scene {
         }
     }
     
+    // Render class-specific hats and props
+    renderPlayerHat(ctx, p, classData, bobOffset) {
+        const className = classData.name?.toLowerCase() || '';
+        const time = Date.now() / 1000;
+        const hw = p.width / 2;
+        const hh = p.height / 2;
+        
+        ctx.save();
+        ctx.translate(p.x, p.y - hh + bobOffset);
+        
+        switch(className) {
+            case 'knight':
+                // Knight helmet with visor
+                ctx.fillStyle = '#666';
+                ctx.fillRect(-hw + 2, -10, p.width - 4, 10);
+                ctx.fillStyle = '#888';
+                ctx.fillRect(-hw + 4, -8, p.width - 8, 5);
+                // Visor slit
+                ctx.fillStyle = '#222';
+                ctx.fillRect(-hw + 6, -6, p.width - 12, 2);
+                // Plume
+                ctx.fillStyle = '#cc3333';
+                ctx.fillRect(-2, -16, 4, 7);
+                break;
+                
+            case 'viking':
+                // Horned helmet
+                ctx.fillStyle = '#8b7355';
+                ctx.fillRect(-hw + 1, -8, p.width - 2, 9);
+                // Horns
+                ctx.fillStyle = '#f5deb3';
+                ctx.beginPath();
+                ctx.moveTo(-hw - 3, -5);
+                ctx.lineTo(-hw + 4, -2);
+                ctx.lineTo(-hw + 2, 2);
+                ctx.closePath();
+                ctx.fill();
+                ctx.beginPath();
+                ctx.moveTo(hw + 3, -5);
+                ctx.lineTo(hw - 4, -2);
+                ctx.lineTo(hw - 2, 2);
+                ctx.closePath();
+                ctx.fill();
+                break;
+                
+            case 'samurai':
+                // Kabuto helmet
+                ctx.fillStyle = '#1a1a2e';
+                ctx.fillRect(-hw + 1, -6, p.width - 2, 7);
+                // Crest
+                ctx.fillStyle = '#ffd700';
+                ctx.beginPath();
+                ctx.moveTo(0, -12);
+                ctx.lineTo(-6, -4);
+                ctx.lineTo(6, -4);
+                ctx.closePath();
+                ctx.fill();
+                break;
+                
+            case 'assassin':
+                // Hood
+                ctx.fillStyle = '#2a2a2a';
+                ctx.beginPath();
+                ctx.moveTo(0, -12);
+                ctx.lineTo(-hw - 1, 3);
+                ctx.lineTo(hw + 1, 3);
+                ctx.closePath();
+                ctx.fill();
+                break;
+                
+            case 'ninja':
+                // Ninja headband
+                ctx.fillStyle = '#333';
+                ctx.fillRect(-hw - 1, -5, p.width + 2, 6);
+                // Metal plate
+                ctx.fillStyle = '#888';
+                ctx.fillRect(-4, -4, 8, 4);
+                // Headband tails
+                ctx.fillStyle = '#333';
+                ctx.fillRect(hw, -4, 6, 2);
+                break;
+                
+            case 'archer':
+                // Feathered cap
+                ctx.fillStyle = '#228b22';
+                ctx.beginPath();
+                ctx.moveTo(-hw + 2, -1);
+                ctx.lineTo(0, -9);
+                ctx.lineTo(hw - 2, -1);
+                ctx.closePath();
+                ctx.fill();
+                // Feather
+                ctx.fillStyle = '#ff6347';
+                ctx.beginPath();
+                ctx.moveTo(hw - 4, -3);
+                ctx.lineTo(hw + 3, -12);
+                ctx.lineTo(hw - 1, -4);
+                ctx.closePath();
+                ctx.fill();
+                break;
+                
+            case 'musketeer':
+                // Wide-brimmed hat
+                ctx.fillStyle = '#4a3728';
+                ctx.fillRect(-hw - 4, -5, p.width + 8, 5);
+                ctx.fillRect(-hw + 2, -11, p.width - 4, 7);
+                // Feather
+                ctx.fillStyle = '#fff';
+                ctx.beginPath();
+                ctx.moveTo(hw - 3, -9);
+                ctx.quadraticCurveTo(hw + 5, -18, hw - 1, -5);
+                ctx.closePath();
+                ctx.fill();
+                break;
+                
+            case 'mage':
+                // Wizard hat
+                ctx.fillStyle = '#4169e1';
+                ctx.beginPath();
+                ctx.moveTo(0, -20);
+                ctx.lineTo(-hw - 2, -1);
+                ctx.lineTo(hw + 2, -1);
+                ctx.closePath();
+                ctx.fill();
+                ctx.fillStyle = '#3a5fcd';
+                ctx.fillRect(-hw - 3, -3, p.width + 6, 4);
+                // Star
+                ctx.fillStyle = '#ffd700';
+                ctx.beginPath();
+                ctx.arc(-1 + Math.sin(time) * 1, -11, 2, 0, Math.PI * 2);
+                ctx.fill();
+                break;
+                
+            case 'arcmage':
+                // Grand wizard hat
+                ctx.fillStyle = '#800080';
+                ctx.beginPath();
+                ctx.moveTo(0, -24);
+                ctx.lineTo(-hw - 3, -1);
+                ctx.lineTo(hw + 3, -1);
+                ctx.closePath();
+                ctx.fill();
+                ctx.fillStyle = '#9932cc';
+                ctx.fillRect(-hw - 4, -3, p.width + 8, 4);
+                // Glowing gem
+                const gemGlow = 0.5 + Math.sin(time * 3) * 0.5;
+                ctx.fillStyle = `rgba(0, 255, 255, ${gemGlow})`;
+                ctx.beginPath();
+                ctx.arc(0, -14, 3, 0, Math.PI * 2);
+                ctx.fill();
+                break;
+                
+            case 'darkmage':
+                // Dark hood with horns
+                ctx.fillStyle = '#1a0a1a';
+                ctx.beginPath();
+                ctx.moveTo(0, -14);
+                ctx.lineTo(-hw - 1, 2);
+                ctx.lineTo(hw + 1, 2);
+                ctx.closePath();
+                ctx.fill();
+                // Small horns
+                ctx.fillStyle = '#330033';
+                ctx.beginPath();
+                ctx.moveTo(-hw + 3, -8);
+                ctx.lineTo(-hw - 1, -15);
+                ctx.lineTo(-hw + 5, -5);
+                ctx.closePath();
+                ctx.fill();
+                ctx.beginPath();
+                ctx.moveTo(hw - 3, -8);
+                ctx.lineTo(hw + 1, -15);
+                ctx.lineTo(hw - 5, -5);
+                ctx.closePath();
+                ctx.fill();
+                break;
+                
+            case 'necromancer':
+                // Skull crown
+                ctx.fillStyle = '#f0f0f0';
+                ctx.beginPath();
+                ctx.arc(0, -7, 7, Math.PI, 0);
+                ctx.fill();
+                ctx.fillRect(-7, -7, 14, 5);
+                // Eye sockets
+                ctx.fillStyle = '#300';
+                ctx.beginPath();
+                ctx.arc(-3, -7, 2, 0, Math.PI * 2);
+                ctx.arc(3, -7, 2, 0, Math.PI * 2);
+                ctx.fill();
+                // Glowing eyes
+                const eyePulse = 0.3 + Math.sin(time * 4) * 0.7;
+                ctx.fillStyle = `rgba(255, 0, 100, ${eyePulse})`;
+                ctx.beginPath();
+                ctx.arc(-3, -7, 1, 0, Math.PI * 2);
+                ctx.arc(3, -7, 1, 0, Math.PI * 2);
+                ctx.fill();
+                break;
+                
+            case 'priest':
+                // Holy halo
+                ctx.strokeStyle = '#ffd700';
+                ctx.lineWidth = 2;
+                const haloGlow = 0.6 + Math.sin(time * 2) * 0.4;
+                ctx.globalAlpha = haloGlow;
+                ctx.beginPath();
+                ctx.ellipse(0, -10, 10, 4, 0, 0, Math.PI * 2);
+                ctx.stroke();
+                ctx.globalAlpha = 1;
+                // Small cross
+                ctx.fillStyle = '#ffd700';
+                ctx.fillRect(-1, -16, 2, 8);
+                ctx.fillRect(-3, -13, 6, 2);
+                break;
+                
+            case 'magical knight':
+            case 'magicalknight':
+                // Enchanted knight helmet
+                ctx.fillStyle = '#4a5568';
+                ctx.fillRect(-hw + 2, -9, p.width - 4, 10);
+                ctx.fillStyle = '#5a6578';
+                ctx.fillRect(-hw + 4, -7, p.width - 8, 5);
+                // Magic runes
+                const runeGlow = 0.5 + Math.sin(time * 3) * 0.5;
+                ctx.strokeStyle = `rgba(100, 200, 255, ${runeGlow})`;
+                ctx.lineWidth = 1;
+                ctx.strokeRect(-hw + 5, -6, p.width - 10, 4);
+                // Enchanted plume
+                ctx.fillStyle = `rgba(100, 200, 255, ${0.7 + Math.sin(time * 2) * 0.3})`;
+                ctx.fillRect(-2, -15, 4, 7);
+                break;
+        }
+        
+        ctx.restore();
+    }
+    
+    // Render equipped weapon in player's hand
+    renderPlayerWeapon(ctx, p, bobOffset) {
+        const weapon = p.equipment?.weapon;
+        const classData = ClassDefinitions[this.selectedClass];
+        
+        // Calculate weapon position based on facing direction and attack state
+        const weaponAngle = Math.atan2(p.facingY, p.facingX);
+        const isAttacking = p.attackCooldown > 0;
+        const swingPhase = isAttacking ? (p.attackCooldown / 0.5) * Math.PI : 0;
+        
+        ctx.save();
+        ctx.translate(p.x, p.y + bobOffset);
+        ctx.rotate(weaponAngle);
+        
+        // Offset from body - move weapon further from sprite for better visibility
+        const handOffsetX = 24; // Increased from 16
+        const handOffsetY = 12; // Increased from 8
+        
+        ctx.translate(handOffsetX, handOffsetY);
+        
+        // For ranged attack types, don't do melee swing animation
+        const isRangedAttack = ['projectile', 'arrow', 'musketShot', 'boneSpear'].includes(classData.defaultAttackType);
+        
+        // Swing animation (only for melee weapons)
+        if (isAttacking && !isRangedAttack) {
+            ctx.rotate(-swingPhase + Math.PI / 4);
+        }
+        
+        // Determine weapon type - prefer ranged weapon for ranged classes
+        let weaponType = weapon?.type;
+        if (!weaponType) {
+            if (classData.defaultAttackType === 'musketShot') {
+                weaponType = 'musket';
+            } else if (classData.defaultAttackType === 'arrow') {
+                weaponType = 'bow';
+            } else {
+                weaponType = classData.weaponTypes?.[0] || 'sword';
+            }
+        }
+        const weaponColor = weapon?.color || '#aaaaaa';
+        
+        // Draw weapon based on type with improved aesthetics
+        switch (weaponType) {
+            case 'sword':
+            case 'enchanted_sword':
+                // Blade
+                ctx.fillStyle = '#c0c0c0';
+                ctx.beginPath();
+                ctx.moveTo(0, -2);
+                ctx.lineTo(22, -3);
+                ctx.lineTo(25, 0);
+                ctx.lineTo(22, 3);
+                ctx.lineTo(0, 2);
+                ctx.closePath();
+                ctx.fill();
+                // Edge highlight
+                ctx.strokeStyle = '#ffffff';
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                ctx.moveTo(2, -1);
+                ctx.lineTo(22, -2);
+                ctx.stroke();
+                // Guard
+                ctx.fillStyle = '#8b4513';
+                ctx.fillRect(-2, -5, 4, 10);
+                // Handle
+                ctx.fillStyle = '#4a3520';
+                ctx.fillRect(-8, -2, 6, 4);
+                // Pommel
+                ctx.fillStyle = weaponColor;
+                ctx.beginPath();
+                ctx.arc(-9, 0, 3, 0, Math.PI * 2);
+                ctx.fill();
+                break;
+                
+            case 'katana':
+                // Curved blade
+                ctx.strokeStyle = '#e8e8e8';
+                ctx.lineWidth = 3;
+                ctx.beginPath();
+                ctx.moveTo(0, 0);
+                ctx.quadraticCurveTo(15, -4, 28, -2);
+                ctx.stroke();
+                // Edge
+                ctx.strokeStyle = '#ffffff';
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                ctx.moveTo(2, -1);
+                ctx.quadraticCurveTo(15, -5, 27, -3);
+                ctx.stroke();
+                // Tsuba (guard)
+                ctx.fillStyle = '#2a2a2a';
+                ctx.beginPath();
+                ctx.ellipse(-1, 0, 4, 6, 0, 0, Math.PI * 2);
+                ctx.fill();
+                // Handle (wrapped)
+                ctx.fillStyle = '#1a1a2a';
+                ctx.fillRect(-12, -2, 11, 4);
+                for (let i = 0; i < 3; i++) {
+                    ctx.fillStyle = '#daa520';
+                    ctx.fillRect(-11 + i * 4, -2, 2, 4);
+                }
+                break;
+                
+            case 'axe':
+            case 'runic_axe':
+                // Handle
+                ctx.fillStyle = '#5a4030';
+                ctx.fillRect(-4, -2, 20, 4);
+                // Axe head
+                ctx.fillStyle = '#707070';
+                ctx.beginPath();
+                ctx.moveTo(14, -2);
+                ctx.lineTo(22, -10);
+                ctx.lineTo(26, -8);
+                ctx.lineTo(22, 0);
+                ctx.lineTo(26, 8);
+                ctx.lineTo(22, 10);
+                ctx.lineTo(14, 2);
+                ctx.closePath();
+                ctx.fill();
+                // Edge
+                ctx.strokeStyle = '#a0a0a0';
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                ctx.moveTo(22, -9);
+                ctx.lineTo(25, 0);
+                ctx.lineTo(22, 9);
+                ctx.stroke();
+                break;
+                
+            case 'staff':
+                // Wooden shaft
+                ctx.fillStyle = '#5a4030';
+                ctx.fillRect(-10, -2, 32, 4);
+                // Ornate top
+                ctx.fillStyle = '#8b4513';
+                ctx.beginPath();
+                ctx.arc(24, 0, 6, 0, Math.PI * 2);
+                ctx.fill();
+                // Magic crystal
+                ctx.fillStyle = classData.color || '#9370db';
+                ctx.beginPath();
+                ctx.arc(24, 0, 4, 0, Math.PI * 2);
+                ctx.fill();
+                // Glow
+                ctx.fillStyle = `rgba(200, 150, 255, ${0.3 + Math.sin(Date.now() / 200) * 0.2})`;
+                ctx.beginPath();
+                ctx.arc(24, 0, 6, 0, Math.PI * 2);
+                ctx.fill();
+                break;
+                
+            case 'wand':
+                // Shaft
+                ctx.fillStyle = '#3a3a3a';
+                ctx.fillRect(-4, -1.5, 22, 3);
+                // Tip crystal
+                ctx.fillStyle = classData.color || '#9370db';
+                ctx.beginPath();
+                ctx.moveTo(18, 0);
+                ctx.lineTo(22, -4);
+                ctx.lineTo(26, 0);
+                ctx.lineTo(22, 4);
+                ctx.closePath();
+                ctx.fill();
+                // Glow
+                ctx.fillStyle = `rgba(200, 150, 255, ${0.4 + Math.sin(Date.now() / 150) * 0.3})`;
+                ctx.beginPath();
+                ctx.arc(22, 0, 5, 0, Math.PI * 2);
+                ctx.fill();
+                break;
+                
+            case 'bow':
+                // Bowstring
+                ctx.strokeStyle = '#888';
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                ctx.moveTo(0, -18);
+                ctx.lineTo(8, 0);
+                ctx.lineTo(0, 18);
+                ctx.stroke();
+                // Bow body (curved)
+                ctx.strokeStyle = '#5a4030';
+                ctx.lineWidth = 3;
+                ctx.beginPath();
+                ctx.moveTo(0, -18);
+                ctx.quadraticCurveTo(-8, 0, 0, 18);
+                ctx.stroke();
+                // Arrow (if not attacking)
+                if (!isAttacking) {
+                    ctx.fillStyle = '#4a3a2a';
+                    ctx.fillRect(6, -1, 16, 2);
+                    ctx.fillStyle = '#808080';
+                    ctx.beginPath();
+                    ctx.moveTo(22, 0);
+                    ctx.lineTo(18, -3);
+                    ctx.lineTo(18, 3);
+                    ctx.closePath();
+                    ctx.fill();
+                }
+                break;
+                
+            case 'scythe':
+                // Long handle
+                ctx.fillStyle = '#3a3a3a';
+                ctx.fillRect(-8, -2, 30, 4);
+                // Blade
+                ctx.fillStyle = '#606060';
+                ctx.beginPath();
+                ctx.moveTo(20, -2);
+                ctx.quadraticCurveTo(30, -15, 18, -20);
+                ctx.lineTo(16, -18);
+                ctx.quadraticCurveTo(26, -12, 20, 2);
+                ctx.closePath();
+                ctx.fill();
+                // Edge
+                ctx.strokeStyle = '#a0a0a0';
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                ctx.moveTo(20, -3);
+                ctx.quadraticCurveTo(29, -14, 18, -19);
+                ctx.stroke();
+                break;
+                
+            case 'dagger':
+                // Short blade
+                ctx.fillStyle = '#c0c0c0';
+                ctx.beginPath();
+                ctx.moveTo(0, -1.5);
+                ctx.lineTo(14, -2);
+                ctx.lineTo(16, 0);
+                ctx.lineTo(14, 2);
+                ctx.lineTo(0, 1.5);
+                ctx.closePath();
+                ctx.fill();
+                // Handle
+                ctx.fillStyle = '#4a3520';
+                ctx.fillRect(-6, -2, 6, 4);
+                break;
+                
+            case 'kunai':
+                // Kunai blade (leaf-shaped)
+                ctx.fillStyle = '#4a4a4a';
+                ctx.beginPath();
+                ctx.moveTo(0, 0);
+                ctx.lineTo(16, -4);
+                ctx.lineTo(20, 0);
+                ctx.lineTo(16, 4);
+                ctx.closePath();
+                ctx.fill();
+                // Edge highlight
+                ctx.strokeStyle = '#808080';
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                ctx.moveTo(2, 0);
+                ctx.lineTo(18, -3);
+                ctx.stroke();
+                // Ring at end (for holding/throwing)
+                ctx.strokeStyle = '#3a3a3a';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.arc(-6, 0, 5, 0, Math.PI * 2);
+                ctx.stroke();
+                // Handle wrap
+                ctx.fillStyle = '#2a2020';
+                ctx.fillRect(-3, -2, 4, 4);
+                break;
+                
+            case 'lance':
+            case 'magic_lance':
+                // Long shaft
+                ctx.fillStyle = '#4a3a2a';
+                ctx.fillRect(-8, -2, 35, 4);
+                // Spearhead
+                ctx.fillStyle = '#808080';
+                ctx.beginPath();
+                ctx.moveTo(27, 0);
+                ctx.lineTo(35, 0);
+                ctx.lineTo(27, -5);
+                ctx.moveTo(27, 0);
+                ctx.lineTo(27, 5);
+                ctx.closePath();
+                ctx.fill();
+                // Guard
+                ctx.fillStyle = '#5a5a5a';
+                ctx.fillRect(24, -4, 3, 8);
+                break;
+                
+            case 'hammer':
+            case 'mace':
+                // Handle
+                ctx.fillStyle = '#5a4030';
+                ctx.fillRect(-4, -2, 18, 4);
+                // Head
+                ctx.fillStyle = '#606060';
+                ctx.fillRect(12, -8, 10, 16);
+                // Studs
+                ctx.fillStyle = '#404040';
+                ctx.beginPath();
+                ctx.arc(17, -6, 2, 0, Math.PI * 2);
+                ctx.arc(17, 6, 2, 0, Math.PI * 2);
+                ctx.fill();
+                break;
+                
+            case 'musket':
+                // Long ornate musket barrel
+                ctx.fillStyle = '#3a3a3a';
+                ctx.fillRect(0, -2.5, 35, 5);
+                // Barrel bands
+                ctx.fillStyle = '#c0a030';
+                ctx.fillRect(8, -3, 3, 6);
+                ctx.fillRect(20, -3, 3, 6);
+                // Muzzle
+                ctx.fillStyle = '#2a2a2a';
+                ctx.beginPath();
+                ctx.arc(35, 0, 3, 0, Math.PI * 2);
+                ctx.fill();
+                // Wooden stock (curved)
+                ctx.fillStyle = '#6b4423';
+                ctx.beginPath();
+                ctx.moveTo(0, -3);
+                ctx.lineTo(-8, -4);
+                ctx.quadraticCurveTo(-14, -2, -16, 4);
+                ctx.lineTo(-14, 8);
+                ctx.lineTo(-6, 6);
+                ctx.lineTo(0, 3);
+                ctx.closePath();
+                ctx.fill();
+                // Stock highlight
+                ctx.fillStyle = '#8b5a2b';
+                ctx.beginPath();
+                ctx.moveTo(-2, -2);
+                ctx.lineTo(-6, -3);
+                ctx.quadraticCurveTo(-10, -1, -12, 3);
+                ctx.lineTo(-10, 5);
+                ctx.lineTo(-4, 4);
+                ctx.closePath();
+                ctx.fill();
+                // Trigger and guard
+                ctx.strokeStyle = '#c0a030';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.arc(-4, 6, 4, 0, Math.PI);
+                ctx.stroke();
+                ctx.fillStyle = '#404040';
+                ctx.fillRect(-5, 4, 2, 4);
+                // Flintlock mechanism
+                ctx.fillStyle = '#606060';
+                ctx.fillRect(-3, -4, 6, 3);
+                break;
+                
+            case 'crossbow':
+                // Barrel
+                ctx.fillStyle = '#404040';
+                ctx.fillRect(0, -2, 28, 4);
+                // Stock
+                ctx.fillStyle = '#5a4030';
+                ctx.beginPath();
+                ctx.moveTo(0, -3);
+                ctx.lineTo(-12, -5);
+                ctx.lineTo(-12, 5);
+                ctx.lineTo(0, 3);
+                ctx.closePath();
+                ctx.fill();
+                // Crossbow arms
+                ctx.strokeStyle = '#4a3a2a';
+                ctx.lineWidth = 3;
+                ctx.beginPath();
+                ctx.moveTo(20, 0);
+                ctx.lineTo(20, -12);
+                ctx.moveTo(20, 0);
+                ctx.lineTo(20, 12);
+                ctx.stroke();
+                // String
+                ctx.strokeStyle = '#888';
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                ctx.moveTo(20, -12);
+                ctx.lineTo(8, 0);
+                ctx.lineTo(20, 12);
+                ctx.stroke();
+                // Trigger guard
+                ctx.strokeStyle = '#303030';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.arc(-2, 6, 4, 0, Math.PI);
+                ctx.stroke();
+                break;
+                
+            default:
+                // Default simple weapon
+                ctx.fillStyle = weaponColor;
+                ctx.fillRect(0, -2, 18, 4);
+                break;
+        }
+        
+        ctx.restore();
+    }
+    
     lightenColor(hex, percent) {
         const num = parseInt(hex.replace('#', ''), 16);
         const amt = Math.round(2.55 * percent);
@@ -910,6 +4034,38 @@ class GameScene extends Scene {
         const isMoving = speed > 5;
         const bobOffset = isMoving ? Math.sin(time * 10 + enemy.x) * 2 : Math.sin(time * 2 + enemy.x) * 1;
         
+        // Render boss dash afterimages
+        if (enemy.bossDashTrail && enemy.bossDashTrail.length > 0) {
+            for (const trail of enemy.bossDashTrail) {
+                ctx.save();
+                ctx.globalAlpha = trail.alpha * 0.6;
+                ctx.translate(trail.x, trail.y);
+                
+                // Crackling distortion effect
+                const crackle = Math.sin(time * 50 + trail.x) * 3;
+                ctx.fillStyle = trail.color;
+                ctx.shadowColor = '#ffffff';
+                ctx.shadowBlur = 10 + Math.random() * 10;
+                
+                // Draw distorted afterimage
+                ctx.fillRect(-enemy.width/2 + crackle, -enemy.height/2, enemy.width, enemy.height);
+                
+                // Crackling lightning lines
+                ctx.strokeStyle = '#ffffff';
+                ctx.lineWidth = 1 + Math.random();
+                ctx.beginPath();
+                const startX = -enemy.width/2 + Math.random() * enemy.width;
+                const startY = -enemy.height/2 + Math.random() * enemy.height;
+                ctx.moveTo(startX, startY);
+                for (let i = 0; i < 3; i++) {
+                    ctx.lineTo(startX + (Math.random() - 0.5) * 30, startY + (Math.random() - 0.5) * 30);
+                }
+                ctx.stroke();
+                
+                ctx.restore();
+            }
+        }
+        
         // Shadow
         ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
         ctx.beginPath();
@@ -919,68 +4075,26 @@ class GameScene extends Scene {
         ctx.save();
         ctx.translate(enemy.x, enemy.y + bobOffset);
         
-        // Body
+        // Boss-specific rendering based on theme/type
         if (enemy.isBoss) {
-            // Boss glow effect
-            ctx.shadowColor = enemy.color;
-            ctx.shadowBlur = 15 + Math.sin(time * 3) * 5;
-        }
-        
-        ctx.fillStyle = enemy.color;
-        const squash = isMoving ? 1 + Math.sin(time * 10) * 0.05 : 1;
-        ctx.fillRect(-enemy.width/2 * (2 - squash), -enemy.height/2 * squash, 
-                     enemy.width * (2 - squash), enemy.height * squash);
-        
-        ctx.shadowBlur = 0;
-        
-        // Face features based on state
-        if (enemy.state === 'attack') {
-            // Angry eyes
-            ctx.fillStyle = '#ff0000';
-            ctx.fillRect(-8, -6, 6, 6);
-            ctx.fillRect(2, -6, 6, 6);
-            // Open mouth
-            ctx.fillStyle = '#400000';
-            ctx.fillRect(-4, 4, 8, 4);
-        } else if (enemy.state === 'chase') {
-            // Alert eyes
-            ctx.fillStyle = '#ffaa00';
-            ctx.fillRect(-6, -4, 5, 5);
-            ctx.fillRect(1, -4, 5, 5);
-            ctx.fillStyle = '#000';
-            const lookX = enemy.facing?.x || 0;
-            ctx.fillRect(-5 + lookX * 2, -3, 3, 3);
-            ctx.fillRect(2 + lookX * 2, -3, 3, 3);
+            this.renderBossSprite(ctx, enemy, time, isMoving);
         } else {
-            // Idle eyes
-            ctx.fillStyle = '#ff6666';
-            ctx.fillRect(-6, -4, 4, 4);
-            ctx.fillRect(2, -4, 4, 4);
+            this.renderMobSprite(ctx, enemy, time, isMoving);
         }
         
         ctx.restore();
         
-        // Health bar
-        const healthPercent = enemy.health / enemy.maxHealth;
-        const barWidth = enemy.isBoss ? 60 : 30;
-        ctx.fillStyle = '#222';
-        ctx.fillRect(enemy.x - barWidth/2 - 1, enemy.y - enemy.height/2 - 10 + bobOffset, barWidth + 2, 6);
-        
-        const healthColor = enemy.isBoss ? '#ff00ff' : 
-                           healthPercent > 0.5 ? '#ff4444' : 
-                           healthPercent > 0.25 ? '#ff8800' : '#ff0000';
-        ctx.fillStyle = healthColor;
-        ctx.fillRect(enemy.x - barWidth/2, enemy.y - enemy.height/2 - 9 + bobOffset, barWidth * healthPercent, 4);
-        
-        // Boss name with shadow
-        if (enemy.isBoss) {
-            ctx.font = 'bold 12px Arial';
-            ctx.textAlign = 'center';
-            ctx.fillStyle = '#000';
-            ctx.fillText(enemy.name, enemy.x + 1, enemy.y - enemy.height/2 - 14 + bobOffset);
-            ctx.fillStyle = '#ff88ff';
-            ctx.fillText(enemy.name, enemy.x, enemy.y - enemy.height/2 - 15 + bobOffset);
-            ctx.textAlign = 'left';
+        // Health bar (only for non-bosses - bosses use big HUD bar)
+        if (!enemy.isBoss) {
+            const healthPercent = enemy.health / enemy.maxHealth;
+            const barWidth = 30;
+            ctx.fillStyle = '#222';
+            ctx.fillRect(enemy.x - barWidth/2 - 1, enemy.y - enemy.height/2 - 10 + bobOffset, barWidth + 2, 6);
+            
+            const healthColor = healthPercent > 0.5 ? '#ff4444' : 
+                               healthPercent > 0.25 ? '#ff8800' : '#ff0000';
+            ctx.fillStyle = healthColor;
+            ctx.fillRect(enemy.x - barWidth/2, enemy.y - enemy.height/2 - 9 + bobOffset, barWidth * healthPercent, 4);
         }
         
         // Damage flash effect
@@ -990,6 +4104,381 @@ class GameScene extends Scene {
             ctx.fillRect(enemy.x - enemy.width/2, enemy.y - enemy.height/2 + bobOffset, enemy.width, enemy.height);
             ctx.globalAlpha = 1;
         }
+    }
+    
+    renderBossSprite(ctx, enemy, time, isMoving) {
+        const w = enemy.width;
+        const h = enemy.height;
+        const pulse = Math.sin(time * 3) * 0.1 + 1;
+        
+        // Boss glow effect
+        ctx.shadowColor = enemy.color;
+        ctx.shadowBlur = 15 + Math.sin(time * 3) * 5;
+        
+        // Detect theme from boss type name (use enemyType first for accuracy)
+        const bossType = (enemy.enemyType || enemy.name || enemy.type || '').toLowerCase();
+        
+        if (bossType.includes('pharaoh') || bossType.includes('anubis') || bossType.includes('egypt')) {
+            // EGYPTIAN PHARAOH BOSS
+            // Headdress/Nemes
+            ctx.fillStyle = '#d4af37'; // Gold
+            ctx.beginPath();
+            ctx.moveTo(-w/2 - 5, -h/2);
+            ctx.lineTo(w/2 + 5, -h/2);
+            ctx.lineTo(w/2 + 8, -h/2 - 15);
+            ctx.lineTo(0, -h/2 - 25);
+            ctx.lineTo(-w/2 - 8, -h/2 - 15);
+            ctx.closePath();
+            ctx.fill();
+            
+            // Striped headdress sides
+            ctx.fillStyle = '#1a237e';
+            ctx.fillRect(-w/2 - 8, -h/2, 4, h/2);
+            ctx.fillRect(w/2 + 4, -h/2, 4, h/2);
+            
+            // Face
+            ctx.fillStyle = '#8d6e63'; // Egyptian skin tone
+            ctx.fillRect(-w/2 + 2, -h/2, w - 4, h * 0.7);
+            
+            // Body wrap
+            ctx.fillStyle = '#f5f5f5';
+            ctx.fillRect(-w/2, h * 0.2, w, h * 0.3);
+            ctx.fillStyle = '#d4af37';
+            ctx.fillRect(-w/2, h * 0.25, w, 3);
+            ctx.fillRect(-w/2, h * 0.4, w, 3);
+            
+            // Eye of Ra
+            ctx.fillStyle = '#000';
+            ctx.fillRect(-8, -h/4, 6, 3);
+            ctx.fillRect(2, -h/4, 6, 3);
+            ctx.fillStyle = '#ff0';
+            ctx.fillRect(-7, -h/4, 4, 2);
+            ctx.fillRect(3, -h/4, 4, 2);
+            
+            // Crook & Flail crossed (if attacking)
+            if (enemy.state === 'attack') {
+                ctx.strokeStyle = '#d4af37';
+                ctx.lineWidth = 3;
+                ctx.beginPath();
+                ctx.moveTo(-w, 0);
+                ctx.lineTo(w, -h/2);
+                ctx.stroke();
+                ctx.beginPath();
+                ctx.moveTo(w, 0);
+                ctx.lineTo(-w, -h/2);
+                ctx.stroke();
+            }
+            
+        } else if (bossType.includes('hades') || bossType.includes('cerberus') || bossType.includes('demon')) {
+            // HADES/UNDERWORLD BOSS
+            // Flame crown
+            for (let i = 0; i < 5; i++) {
+                const fx = -w/2 + (w / 4) * i;
+                const fh = 10 + Math.sin(time * 5 + i) * 5;
+                ctx.fillStyle = `rgba(${150 + i * 20}, ${50 + i * 10}, 255, 0.8)`;
+                ctx.beginPath();
+                ctx.moveTo(fx, -h/2);
+                ctx.lineTo(fx + 5, -h/2 - fh);
+                ctx.lineTo(fx + 10, -h/2);
+                ctx.closePath();
+                ctx.fill();
+            }
+            
+            // Dark body
+            ctx.fillStyle = '#1a1a2e';
+            ctx.fillRect(-w/2, -h/2, w, h);
+            
+            // Glowing runes on body
+            ctx.fillStyle = '#9c27b0';
+            for (let i = 0; i < 3; i++) {
+                const ry = -h/4 + i * 10;
+                ctx.fillRect(-w/4, ry, 3, 6);
+                ctx.fillRect(w/4 - 3, ry, 3, 6);
+            }
+            
+            // Three eyes (Cerberus-like)
+            ctx.fillStyle = '#ff0000';
+            ctx.beginPath();
+            ctx.arc(-8, -h/4, 4, 0, Math.PI * 2);
+            ctx.arc(0, -h/4 - 3, 3, 0, Math.PI * 2);
+            ctx.arc(8, -h/4, 4, 0, Math.PI * 2);
+            ctx.fill();
+            
+            // Dark aura
+            ctx.shadowColor = '#9c27b0';
+            ctx.shadowBlur = 25;
+            
+        } else if (bossType.includes('jungle') || bossType.includes('aztec') || bossType.includes('serpent')) {
+            // JUNGLE/AZTEC BOSS
+            // Feathered headdress
+            const featherColors = ['#f44336', '#4caf50', '#2196f3', '#ffeb3b', '#e91e63'];
+            for (let i = 0; i < 7; i++) {
+                const angle = -Math.PI/2 + (i - 3) * 0.25;
+                const flen = 20 + Math.sin(time * 2 + i) * 3;
+                ctx.strokeStyle = featherColors[i % featherColors.length];
+                ctx.lineWidth = 3;
+                ctx.beginPath();
+                ctx.moveTo((i - 3) * 4, -h/2);
+                ctx.lineTo((i - 3) * 6 + Math.cos(angle) * flen, -h/2 + Math.sin(angle) * flen);
+                ctx.stroke();
+            }
+            
+            // Jade mask face
+            ctx.fillStyle = '#00796b';
+            ctx.fillRect(-w/2, -h/2, w, h * 0.6);
+            
+            // Gold ornaments
+            ctx.fillStyle = '#ffc107';
+            ctx.beginPath();
+            ctx.arc(-w/4, -h/4, 5, 0, Math.PI * 2);
+            ctx.arc(w/4, -h/4, 5, 0, Math.PI * 2);
+            ctx.fill();
+            
+            // Serpent body
+            ctx.fillStyle = '#2e7d32';
+            ctx.fillRect(-w/2, h * 0.1, w, h * 0.4);
+            ctx.fillStyle = '#1b5e20';
+            for (let i = 0; i < 4; i++) {
+                ctx.fillRect(-w/2 + i * 10, h * 0.15, 4, h * 0.3);
+            }
+            
+            // Glowing eyes
+            ctx.fillStyle = '#ffeb3b';
+            ctx.fillRect(-10, -h/4, 6, 4);
+            ctx.fillRect(4, -h/4, 6, 4);
+            
+        } else if (bossType.includes('light') || bossType.includes('angel') || bossType.includes('divine')) {
+            // LIGHT/ANGELIC BOSS
+            // Halo
+            ctx.strokeStyle = '#fff9c4';
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            ctx.arc(0, -h/2 - 12, 12 + Math.sin(time * 2) * 2, 0, Math.PI * 2);
+            ctx.stroke();
+            
+            // Radiant body
+            ctx.fillStyle = '#fff8e1';
+            ctx.fillRect(-w/2, -h/2, w, h);
+            
+            // Wings
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.7)';
+            ctx.beginPath();
+            ctx.moveTo(-w/2, -h/4);
+            ctx.quadraticCurveTo(-w - 10, -h/2, -w - 5, h/4);
+            ctx.quadraticCurveTo(-w/2 - 5, 0, -w/2, -h/4);
+            ctx.fill();
+            ctx.beginPath();
+            ctx.moveTo(w/2, -h/4);
+            ctx.quadraticCurveTo(w + 10, -h/2, w + 5, h/4);
+            ctx.quadraticCurveTo(w/2 + 5, 0, w/2, -h/4);
+            ctx.fill();
+            
+            // Serene face
+            ctx.fillStyle = '#5c6bc0';
+            ctx.fillRect(-8, -h/4, 4, 2);
+            ctx.fillRect(4, -h/4, 4, 2);
+            
+            ctx.shadowColor = '#fff9c4';
+            ctx.shadowBlur = 30;
+            
+        } else if (bossType.includes('cyber') || bossType.includes('mech') || bossType.includes('robot')) {
+            // CYBER/MECHANICAL BOSS
+            // Antenna
+            ctx.strokeStyle = '#00bcd4';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(0, -h/2);
+            ctx.lineTo(0, -h/2 - 15);
+            ctx.stroke();
+            ctx.fillStyle = '#f44336';
+            ctx.beginPath();
+            ctx.arc(0, -h/2 - 15, 3 + Math.sin(time * 5) * 1, 0, Math.PI * 2);
+            ctx.fill();
+            
+            // Metal body
+            ctx.fillStyle = '#37474f';
+            ctx.fillRect(-w/2, -h/2, w, h);
+            
+            // Circuit patterns
+            ctx.strokeStyle = '#00bcd4';
+            ctx.lineWidth = 1;
+            for (let i = 0; i < 4; i++) {
+                ctx.beginPath();
+                ctx.moveTo(-w/2, -h/4 + i * 8);
+                ctx.lineTo(-w/4, -h/4 + i * 8);
+                ctx.lineTo(-w/4, -h/4 + i * 8 + 4);
+                ctx.lineTo(w/4, -h/4 + i * 8 + 4);
+                ctx.lineTo(w/4, -h/4 + i * 8);
+                ctx.lineTo(w/2, -h/4 + i * 8);
+                ctx.stroke();
+            }
+            
+            // Visor eye
+            ctx.fillStyle = '#f44336';
+            ctx.fillRect(-w/3, -h/4, w * 0.66, 4);
+            
+            // Glitch effect
+            if (Math.random() < 0.05) {
+                ctx.fillStyle = '#00bcd4';
+                ctx.fillRect(-w/2, -h/2 + Math.random() * h, w, 3);
+            }
+            
+        } else if (bossType.includes('stone') || bossType.includes('golem') || bossType.includes('titan')) {
+            // STONE/GOLEM BOSS
+            // Craggy body
+            ctx.fillStyle = '#5d4037';
+            ctx.fillRect(-w/2, -h/2, w, h);
+            
+            // Stone texture
+            ctx.fillStyle = '#795548';
+            ctx.fillRect(-w/3, -h/3, w * 0.3, h * 0.4);
+            ctx.fillRect(w/6, -h/4, w * 0.2, h * 0.3);
+            ctx.fillStyle = '#4e342e';
+            ctx.fillRect(-w/4, h * 0.1, w * 0.25, h * 0.2);
+            
+            // Glowing cracks
+            ctx.strokeStyle = '#ff9800';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(-w/3, -h/2);
+            ctx.lineTo(-w/4, 0);
+            ctx.lineTo(-w/2, h/3);
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.moveTo(w/4, -h/3);
+            ctx.lineTo(w/3, h/4);
+            ctx.stroke();
+            
+            // Magma eyes
+            ctx.fillStyle = '#ff5722';
+            ctx.beginPath();
+            ctx.arc(-8, -h/4, 5, 0, Math.PI * 2);
+            ctx.arc(8, -h/4, 5, 0, Math.PI * 2);
+            ctx.fill();
+            
+            ctx.shadowColor = '#ff9800';
+            ctx.shadowBlur = 10;
+            
+        } else {
+            // DEFAULT BOSS (fallback)
+            ctx.fillStyle = enemy.color;
+            const squash = isMoving ? 1 + Math.sin(time * 10) * 0.05 : 1;
+            ctx.fillRect(-w/2 * (2 - squash), -h/2 * squash, w * (2 - squash), h * squash);
+            
+            // Angry eyes
+            ctx.fillStyle = '#ff0000';
+            ctx.fillRect(-8, -h/4, 6, 6);
+            ctx.fillRect(2, -h/4, 6, 6);
+        }
+        
+        ctx.shadowBlur = 0;
+    }
+    
+    renderMobSprite(ctx, enemy, time, isMoving) {
+        const w = enemy.width;
+        const h = enemy.height;
+        
+        // Basic mob body with squash/stretch
+        ctx.fillStyle = enemy.color;
+        const squash = isMoving ? 1 + Math.sin(time * 10) * 0.05 : 1;
+        ctx.fillRect(-w/2 * (2 - squash), -h/2 * squash, w * (2 - squash), h * squash);
+        
+        // Face features based on state
+        if (enemy.state === 'attack') {
+            // Angry eyes
+            ctx.fillStyle = '#ff0000';
+            ctx.fillRect(-6, -4, 4, 4);
+            ctx.fillRect(2, -4, 4, 4);
+            // Open mouth
+            ctx.fillStyle = '#400000';
+            ctx.fillRect(-3, 3, 6, 3);
+        } else if (enemy.state === 'chase') {
+            // Alert eyes
+            ctx.fillStyle = '#ffaa00';
+            ctx.fillRect(-5, -3, 4, 4);
+            ctx.fillRect(1, -3, 4, 4);
+            ctx.fillStyle = '#000';
+            const lookX = enemy.facing?.x || 0;
+            ctx.fillRect(-4 + lookX * 2, -2, 2, 2);
+            ctx.fillRect(2 + lookX * 2, -2, 2, 2);
+        } else {
+            // Idle eyes
+            ctx.fillStyle = '#ff6666';
+            ctx.fillRect(-5, -3, 3, 3);
+            ctx.fillRect(2, -3, 3, 3);
+        }
+    }
+    
+    // Use a health potion (R key)
+    useHealthPotion() {
+        if (!this.player.potions) {
+            this.player.potions = { health: 0, mana: 0 };
+        }
+        if (!this.player.potionCooldowns) {
+            this.player.potionCooldowns = { health: 0, mana: 0 };
+        }
+        
+        // Check cooldown
+        if (this.player.potionCooldowns.health > 0) {
+            return;
+        }
+        
+        // Check if we have potions
+        if (this.player.potions.health <= 0) {
+            this.uiManager.addNotification('No health potions!', 'warning');
+            return;
+        }
+        
+        // Check if health is already full
+        if (this.player.health >= this.player.maxHealth) {
+            this.uiManager.addNotification('Health already full!', 'info');
+            return;
+        }
+        
+        // Use the potion
+        this.player.potions.health--;
+        const healAmount = Math.floor(this.player.maxHealth * 0.35);
+        this.player.health = Math.min(this.player.health + healAmount, this.player.maxHealth);
+        this.player.potionCooldowns.health = 1.0;
+        
+        this.uiManager.addNotification(`+${healAmount} HP`, 'heal');
+        this.soundManager.playHeal();
+    }
+    
+    // Use a mana potion (F key)
+    useManaPotion() {
+        if (!this.player.potions) {
+            this.player.potions = { health: 0, mana: 0 };
+        }
+        if (!this.player.potionCooldowns) {
+            this.player.potionCooldowns = { health: 0, mana: 0 };
+        }
+        
+        // Check cooldown
+        if (this.player.potionCooldowns.mana > 0) {
+            return;
+        }
+        
+        // Check if we have potions
+        if (this.player.potions.mana <= 0) {
+            this.uiManager.addNotification('No mana potions!', 'warning');
+            return;
+        }
+        
+        // Check if mana is already full
+        if (this.player.mana >= this.player.maxMana) {
+            this.uiManager.addNotification('Mana already full!', 'info');
+            return;
+        }
+        
+        // Use the potion
+        this.player.potions.mana--;
+        const manaAmount = Math.floor(this.player.maxMana * 0.35);
+        this.player.mana = Math.min(this.player.mana + manaAmount, this.player.maxMana);
+        this.player.potionCooldowns.mana = 1.0;
+        
+        this.uiManager.addNotification(`+${manaAmount} MP`, 'mana');
+        this.soundManager.playHeal();
     }
 }
 
@@ -1038,17 +4527,22 @@ class IntoTheDeluge {
         this.classSelectUI = null;
         this.currentScene = null;
         this.selectedClass = null;
+        this.menuSoundManager = null;
     }
     
     async init() {
         // Create and initialize engine
         this.engine = new Engine('gameCanvas');
         
+        // Create menu sound manager
+        this.menuSoundManager = new SoundManager();
+        
         // Set up class selection
         this.classSelectUI = new ClassSelectionUI(
             this.engine.canvas,
             ClassDefinitions,
-            (className) => this.onClassSelected(className)
+            (className) => this.onClassSelected(className),
+            this.menuSoundManager
         );
         
         // Set up input handlers for class selection
@@ -1074,6 +4568,9 @@ class IntoTheDeluge {
         
         this.state = GameState.CLASS_SELECT;
         
+        // Show cursor during class selection
+        this.engine.canvas.style.cursor = 'default';
+        
         // Start game loop
         this.engine.start((dt) => this.update(dt), (ctx) => this.render(ctx));
     }
@@ -1082,6 +4579,12 @@ class IntoTheDeluge {
         this.selectedClass = className;
         this.currentScene = new GameScene(this.engine, className);
         this.state = GameState.PLAYING;
+        
+        // Hide cursor during gameplay
+        this.engine.canvas.style.cursor = 'none';
+        
+        // Play save sound when entering the game
+        this.currentScene.soundManager.play('save', 0.6);
     }
     
     update(dt) {
@@ -1092,6 +4595,14 @@ class IntoTheDeluge {
                 
             case GameState.PLAYING:
                 if (this.currentScene) {
+                    // Check if quit to menu was requested
+                    if (this.currentScene.quitToMenu) {
+                        this.state = GameState.CLASS_SELECT;
+                        this.currentScene = null;
+                        this.engine.canvas.style.cursor = 'default';
+                        return;
+                    }
+                    
                     const result = this.currentScene.update(dt);
                     if (result === GameState.DEAD) {
                         this.currentScene = new DeathScene(

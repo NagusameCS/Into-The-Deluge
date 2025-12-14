@@ -12,10 +12,17 @@ class Camera {
         this.width = canvas ? canvas.width : 1280;
         this.height = canvas ? canvas.height : 720;
         this.zoom = 1;
+        this.targetZoom = 1;
         this.shakeIntensity = 0;
         this.shakeDuration = 0;
         this.targetX = 0;
         this.targetY = 0;
+        
+        // Cinematic effects
+        this.impactZoom = 1; // Momentary zoom on big hits
+        this.impactZoomDecay = 0;
+        this.slowMotion = 1; // Time scale (1 = normal)
+        this.slowMotionDuration = 0;
     }
     
     centerOn(x, y) {
@@ -37,10 +44,46 @@ class Camera {
         this.shakeDuration = duration;
     }
     
+    // Cinematic impact zoom - brief zoom in on big hits
+    impactEffect(zoomAmount = 1.1, duration = 0.15) {
+        this.impactZoom = zoomAmount;
+        this.impactZoomDecay = duration;
+    }
+    
+    // Slow motion effect
+    slowMo(scale = 0.3, duration = 0.2) {
+        this.slowMotion = scale;
+        this.slowMotionDuration = duration;
+    }
+    
+    // Get effective time scale for slow motion
+    getTimeScale() {
+        return this.slowMotion;
+    }
+    
     update(dt) {
         if (this.shakeDuration > 0) {
             this.shakeDuration -= dt;
         }
+        
+        // Update impact zoom
+        if (this.impactZoomDecay > 0) {
+            this.impactZoomDecay -= dt;
+            if (this.impactZoomDecay <= 0) {
+                this.impactZoom = 1;
+            }
+        }
+        
+        // Update slow motion
+        if (this.slowMotionDuration > 0) {
+            this.slowMotionDuration -= dt;
+            if (this.slowMotionDuration <= 0) {
+                this.slowMotion = 1;
+            }
+        }
+        
+        // Smooth zoom interpolation
+        this.zoom += (this.targetZoom * this.impactZoom - this.zoom) * 5 * dt;
     }
     
     screenToWorld(screenX, screenY) {
@@ -72,6 +115,9 @@ export class Engine {
         this.ctx = this.canvas.getContext('2d');
         this.canvas.width = width;
         this.canvas.height = height;
+        
+        // Hide the system cursor
+        this.canvas.style.cursor = 'none';
         
         this.running = false;
         this.lastTime = 0;

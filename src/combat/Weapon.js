@@ -7,7 +7,7 @@ export const WeaponTypes = {
     sword: {
         name: 'Sword',
         type: 'melee',
-        range: 50,
+        range: 70,
         attackSpeed: 1.0,
         damageType: 'physical',
         twoHanded: false
@@ -15,7 +15,7 @@ export const WeaponTypes = {
     katana: {
         name: 'Katana',
         type: 'melee',
-        range: 55,
+        range: 75,
         attackSpeed: 1.2,
         damageType: 'physical',
         critBonus: 10,
@@ -24,7 +24,7 @@ export const WeaponTypes = {
     dagger: {
         name: 'Dagger',
         type: 'melee',
-        range: 30,
+        range: 45,
         attackSpeed: 1.8,
         damageType: 'physical',
         critBonus: 15,
@@ -33,7 +33,7 @@ export const WeaponTypes = {
     axe: {
         name: 'Axe',
         type: 'melee',
-        range: 45,
+        range: 65,
         attackSpeed: 0.8,
         damageType: 'physical',
         cleave: true,
@@ -42,7 +42,7 @@ export const WeaponTypes = {
     hammer: {
         name: 'Hammer',
         type: 'melee',
-        range: 40,
+        range: 60,
         attackSpeed: 0.6,
         damageType: 'physical',
         stun: true,
@@ -51,7 +51,7 @@ export const WeaponTypes = {
     mace: {
         name: 'Mace',
         type: 'melee',
-        range: 40,
+        range: 60,
         attackSpeed: 0.9,
         damageType: 'physical',
         armorPierce: 0.2,
@@ -60,7 +60,7 @@ export const WeaponTypes = {
     lance: {
         name: 'Lance',
         type: 'melee',
-        range: 80,
+        range: 100,
         attackSpeed: 0.7,
         damageType: 'physical',
         chargeBonus: 2.0,
@@ -69,7 +69,7 @@ export const WeaponTypes = {
     rapier: {
         name: 'Rapier',
         type: 'melee',
-        range: 55,
+        range: 75,
         attackSpeed: 1.4,
         damageType: 'physical',
         critBonus: 5,
@@ -78,7 +78,7 @@ export const WeaponTypes = {
     scythe: {
         name: 'Scythe',
         type: 'melee',
-        range: 70,
+        range: 90,
         attackSpeed: 0.7,
         damageType: 'physical',
         lifeSteal: 0.1,
@@ -87,7 +87,7 @@ export const WeaponTypes = {
     naginata: {
         name: 'Naginata',
         type: 'melee',
-        range: 75,
+        range: 95,
         attackSpeed: 0.85,
         damageType: 'physical',
         sweep: true,
@@ -96,7 +96,7 @@ export const WeaponTypes = {
     kusarigama: {
         name: 'Kusarigama',
         type: 'melee',
-        range: 60,
+        range: 80,
         attackSpeed: 1.1,
         damageType: 'physical',
         pullEnemy: true,
@@ -211,6 +211,57 @@ export const WeaponTypes = {
         twoHanded: false
     },
     
+    // Additional Melee Weapons
+    short_sword: {
+        name: 'Short Sword',
+        type: 'melee',
+        range: 55,
+        attackSpeed: 1.3,
+        damageType: 'physical',
+        critBonus: 5,
+        twoHanded: false
+    },
+    ninjato: {
+        name: 'Ninjato',
+        type: 'melee',
+        range: 60,
+        attackSpeed: 1.5,
+        damageType: 'physical',
+        critBonus: 12,
+        twoHanded: false
+    },
+    
+    // Hybrid Magic-Melee Weapons (Magic Knight)
+    enchanted_sword: {
+        name: 'Enchanted Sword',
+        type: 'melee',
+        range: 75,
+        attackSpeed: 1.0,
+        damageType: 'magic',
+        spellPower: 0.1,
+        twoHanded: false
+    },
+    magic_lance: {
+        name: 'Magic Lance',
+        type: 'melee',
+        range: 100,
+        attackSpeed: 0.8,
+        damageType: 'magic',
+        chargeBonus: 1.8,
+        spellPower: 0.08,
+        twoHanded: true
+    },
+    runic_axe: {
+        name: 'Runic Axe',
+        type: 'melee',
+        range: 70,
+        attackSpeed: 0.9,
+        damageType: 'magic',
+        cleave: true,
+        spellPower: 0.05,
+        twoHanded: false
+    },
+    
     // Shields
     shield: {
         name: 'Shield',
@@ -248,7 +299,12 @@ export class Weapon {
         this.slot = 'weapon';
         
         // Base stats scaled by level and rarity
-        this.damage = Math.floor((10 + level * 3) * rarityData.statMultiplier);
+        // Low range weapons get a damage bonus to compensate for risk
+        // Range 30 (dagger) = +60% damage, Range 80+ = no bonus
+        const rangeDamageBonus = baseWeapon.type === 'melee' 
+            ? Math.max(0, 1 + (80 - (baseWeapon.range || 50)) * 0.012)
+            : 1;
+        this.damage = Math.floor((10 + level * 3) * rarityData.statMultiplier * rangeDamageBonus);
         this.range = baseWeapon.range;
         this.attackSpeed = baseWeapon.attackSpeed;
         this.damageType = baseWeapon.damageType;
@@ -368,6 +424,184 @@ export function generateWeaponDrop(level, luckOrType = 10, explicitType = null) 
     }
     
     return new Weapon(type, rarity, level);
+}
+
+// ============================================
+// BOSS-THEMED UNIQUE WEAPONS
+// ============================================
+
+export const BossWeapons = {
+    // Skeleton King drops
+    skeletonKing: {
+        name: "Bone King's Scepter",
+        type: 'melee',
+        baseType: 'mace',
+        range: 45,
+        attackSpeed: 1.0,
+        damageType: 'dark',
+        baseDamage: 45,
+        lifeSteal: 0.15,
+        bonusStats: { strength: 10, vitality: 8 },
+        specialEffect: 'Kills have 20% chance to summon a skeleton ally',
+        description: 'The scepter of the undead king, pulsing with necrotic energy'
+    },
+    
+    // Dragon Lord drops
+    dragonLord: {
+        name: "Dragonflame Greatsword",
+        type: 'melee',
+        baseType: 'sword',
+        range: 65,
+        attackSpeed: 0.8,
+        damageType: 'fire',
+        baseDamage: 60,
+        burnChance: 0.3,
+        bonusStats: { strength: 15, vitality: 5 },
+        specialEffect: 'Attacks leave burning ground for 2s',
+        description: 'Forged in dragonfire, this blade burns eternally'
+    },
+    
+    // Lich King drops
+    lichKing: {
+        name: "Staff of the Lich",
+        type: 'ranged',
+        baseType: 'staff',
+        range: 300,
+        attackSpeed: 1.2,
+        damageType: 'dark',
+        baseDamage: 50,
+        manaSteal: 0.2,
+        bonusStats: { intelligence: 20, luck: 5 },
+        specialEffect: 'Spells have 15% chance to freeze enemies',
+        description: 'Contains the trapped soul of a thousand mages'
+    },
+    
+    // Pharaoh drops
+    pharaoh: {
+        name: "Pharaoh's Crook",
+        type: 'melee',
+        baseType: 'staff',
+        range: 55,
+        attackSpeed: 1.1,
+        damageType: 'holy',
+        baseDamage: 40,
+        bonusStats: { intelligence: 12, vitality: 8 },
+        specialEffect: 'Summons sand scarabs that attack enemies',
+        description: 'Symbol of divine pharaonic rule'
+    },
+    
+    // Hades Lord drops  
+    hadesLord: {
+        name: "Hadean Trident",
+        type: 'melee',
+        baseType: 'lance',
+        range: 85,
+        attackSpeed: 0.9,
+        damageType: 'dark',
+        baseDamage: 55,
+        lifeSteal: 0.2,
+        bonusStats: { strength: 12, agility: 8 },
+        specialEffect: 'Kills restore 10% max HP',
+        description: 'Pulled from the rivers of the underworld'
+    },
+    
+    // Jungle Guardian drops
+    jungleGuardian: {
+        name: "Venomfang Blade",
+        type: 'melee',
+        baseType: 'dagger',
+        range: 35,
+        attackSpeed: 2.0,
+        damageType: 'poison',
+        baseDamage: 25,
+        poisonDamage: 15,
+        critBonus: 25,
+        bonusStats: { agility: 18, luck: 8 },
+        specialEffect: 'Poison stacks up to 5 times',
+        description: 'Carved from the fang of the great serpent'
+    },
+    
+    // Light Seraph drops
+    lightSeraph: {
+        name: "Seraph's Judgement",
+        type: 'melee',
+        baseType: 'sword',
+        range: 60,
+        attackSpeed: 1.1,
+        damageType: 'holy',
+        baseDamage: 50,
+        bonusStats: { strength: 10, vitality: 10, luck: 10 },
+        specialEffect: 'Heals 5% max HP on crit',
+        description: 'Blessed by the highest angels of light'
+    },
+    
+    // Cyber Overlord drops
+    cyberOverlord: {
+        name: "Plasma Cannon",
+        type: 'ranged',
+        baseType: 'musket',
+        range: 350,
+        attackSpeed: 0.7,
+        damageType: 'lightning',
+        baseDamage: 70,
+        piercing: true,
+        bonusStats: { intelligence: 15, agility: 10 },
+        specialEffect: 'Shots chain to 2 nearby enemies',
+        description: 'Advanced technology from the cyber realm'
+    },
+    
+    // Stone Colossus drops
+    stoneColossus: {
+        name: "Earthshatter Maul",
+        type: 'melee',
+        baseType: 'hammer',
+        range: 50,
+        attackSpeed: 0.5,
+        damageType: 'physical',
+        baseDamage: 80,
+        stunChance: 0.25,
+        bonusStats: { strength: 25, vitality: 15 },
+        specialEffect: 'Heavy attacks create shockwaves',
+        description: 'Carved from the heart of the stone titan'
+    }
+};
+
+// Generate a boss-themed weapon drop
+export function generateBossWeapon(bossType, level) {
+    const bossWeaponConfig = BossWeapons[bossType];
+    
+    if (!bossWeaponConfig) {
+        // If no specific boss weapon, generate a legendary weapon
+        return generateWeaponDrop(level, 100); // High luck for good rarity
+    }
+    
+    // Create a special boss weapon
+    const weapon = {
+        name: bossWeaponConfig.name,
+        type: bossWeaponConfig.baseType,
+        weaponType: bossWeaponConfig.type,
+        rarity: 'legendary',
+        level: level,
+        damage: Math.floor(bossWeaponConfig.baseDamage * (1 + level * 0.15)),
+        range: bossWeaponConfig.range,
+        attackSpeed: bossWeaponConfig.attackSpeed,
+        damageType: bossWeaponConfig.damageType,
+        specialEffect: bossWeaponConfig.specialEffect,
+        description: bossWeaponConfig.description,
+        isBossWeapon: true,
+        stats: { ...bossWeaponConfig.bonusStats }
+    };
+    
+    // Add special properties
+    if (bossWeaponConfig.lifeSteal) weapon.lifeSteal = bossWeaponConfig.lifeSteal;
+    if (bossWeaponConfig.manaSteal) weapon.manaSteal = bossWeaponConfig.manaSteal;
+    if (bossWeaponConfig.critBonus) weapon.critBonus = bossWeaponConfig.critBonus;
+    if (bossWeaponConfig.burnChance) weapon.burnChance = bossWeaponConfig.burnChance;
+    if (bossWeaponConfig.poisonDamage) weapon.poisonDamage = bossWeaponConfig.poisonDamage;
+    if (bossWeaponConfig.stunChance) weapon.stunChance = bossWeaponConfig.stunChance;
+    if (bossWeaponConfig.piercing) weapon.piercing = bossWeaponConfig.piercing;
+    
+    return weapon;
 }
 
 export default Weapon;
