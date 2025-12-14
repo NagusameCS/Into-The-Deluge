@@ -1044,13 +1044,13 @@ export const ClassDefinitions = {
             },
             {
                 name: 'Spell Shield',
-                description: 'Create a barrier blocking magic damage',
-                absorb: 60, // Reduced from 100
-                manaCost: 40, // Increased from 35
-                cooldown: 15, // Increased from 12
-                duration: 4, // Reduced from 5
+                description: 'Create a magical barrier blocking 5 hits',
+                shieldHits: 5,
+                manaCost: 40,
+                cooldown: 20,
+                duration: 15,
                 type: 'buff',
-                blockType: 'magic'
+                effects: [{ type: 'shield_active', value: 5, duration: 15 }]
             },
             {
                 name: 'Elemental Strike',

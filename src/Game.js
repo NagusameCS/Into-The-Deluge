@@ -3350,31 +3350,43 @@ class GameScene extends Scene {
         }
         
         // Shield/Defense buff visual effect
-        if (p.hasStatusEffect && p.hasStatusEffect('defense_up')) {
+        const hasShield = p.hasStatusEffect && (p.hasStatusEffect('defense_up') || p.hasStatusEffect('shield_active'));
+        if (hasShield) {
             const shieldPulse = Math.sin(time * 4) * 0.15 + 0.85;
             const shieldRadius = Math.max(bodyW, bodyH) * 0.9 + 8;
             
+            // Get shield hits remaining for visual intensity
+            let shieldHits = 0;
+            if (p.hasStatusEffect('shield_active') && p.statusEffects instanceof Map) {
+                const shield = p.statusEffects.get('shield_active');
+                shieldHits = shield ? shield.value : 0;
+            }
+            
+            // Color based on shield type - spell shield is more purple/magical
+            const isSpellShield = p.hasStatusEffect('shield_active');
+            const baseColor = isSpellShield ? [180, 100, 255] : [100, 200, 255];
+            
             // Outer glow
             ctx.save();
-            ctx.shadowColor = '#66ccff';
+            ctx.shadowColor = isSpellShield ? '#aa66ff' : '#66ccff';
             ctx.shadowBlur = 20 * shieldPulse;
             
             // Shield bubble
-            ctx.strokeStyle = `rgba(100, 200, 255, ${0.6 * shieldPulse})`;
+            ctx.strokeStyle = `rgba(${baseColor[0]}, ${baseColor[1]}, ${baseColor[2]}, ${0.6 * shieldPulse})`;
             ctx.lineWidth = 3;
             ctx.beginPath();
             ctx.arc(0, 0, shieldRadius, 0, Math.PI * 2);
             ctx.stroke();
             
             // Inner glow ring
-            ctx.strokeStyle = `rgba(150, 220, 255, ${0.4 * shieldPulse})`;
+            ctx.strokeStyle = `rgba(${baseColor[0] + 50}, ${baseColor[1] + 20}, ${baseColor[2]}, ${0.4 * shieldPulse})`;
             ctx.lineWidth = 2;
             ctx.beginPath();
             ctx.arc(0, 0, shieldRadius - 4, 0, Math.PI * 2);
             ctx.stroke();
             
             // Hexagon overlay for magical feel
-            ctx.strokeStyle = `rgba(200, 240, 255, ${0.3 * shieldPulse})`;
+            ctx.strokeStyle = `rgba(${baseColor[0] + 70}, ${baseColor[1] + 40}, 255, ${0.3 * shieldPulse})`;
             ctx.lineWidth = 1;
             ctx.beginPath();
             for (let i = 0; i < 6; i++) {
@@ -3386,6 +3398,14 @@ class GameScene extends Scene {
             }
             ctx.closePath();
             ctx.stroke();
+            
+            // Show remaining hits for spell shield
+            if (isSpellShield && shieldHits > 0) {
+                ctx.fillStyle = `rgba(255, 255, 255, ${0.8 * shieldPulse})`;
+                ctx.font = 'bold 10px Arial';
+                ctx.textAlign = 'center';
+                ctx.fillText(`${shieldHits}`, 0, -shieldRadius - 5);
+            }
             
             ctx.restore();
         }

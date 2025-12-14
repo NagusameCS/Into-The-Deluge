@@ -963,17 +963,41 @@ export class Character extends Entity {
     
     // Check if status effect is active
     hasStatusEffect(type) {
-        return this.statusEffects?.some(e => e.type === type);
+        if (this.statusEffects instanceof Map) {
+            return this.statusEffects.has(type);
+        }
+        return this.statusEffects?.some?.(e => e.type === type) || false;
     }
     
     // Get status effect value
     getStatusEffectValue(type) {
-        const effect = this.statusEffects?.find(e => e.type === type);
+        if (this.statusEffects instanceof Map) {
+            const effect = this.statusEffects.get(type);
+            return effect ? effect.value : 0;
+        }
+        const effect = this.statusEffects?.find?.(e => e.type === type);
         return effect ? effect.value : 0;
     }
     
     takeDamage(amount, source = null) {
         if (this.invulnerable) return 0;
+        
+        // Check for active shield (blocks hits completely)
+        if (this.hasStatusEffect && this.hasStatusEffect('shield_active')) {
+            // Get the shield effect and decrement hits
+            if (this.statusEffects instanceof Map) {
+                const shield = this.statusEffects.get('shield_active');
+                if (shield && shield.value > 0) {
+                    shield.value--;
+                    if (shield.value <= 0) {
+                        this.statusEffects.delete('shield_active');
+                    }
+                    // Shield absorbed the hit
+                    this.pendingStatusVisual = { type: 'shield_block' };
+                    return 0;
+                }
+            }
+        }
         
         // Apply defense
         const defense = this.defense + (this.equipment.armor?.defense || 0);

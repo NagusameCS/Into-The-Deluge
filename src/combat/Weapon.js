@@ -7,7 +7,7 @@ export const WeaponTypes = {
     sword: {
         name: 'Sword',
         type: 'melee',
-        range: 70,
+        range: 140,
         attackSpeed: 1.0,
         damageType: 'physical',
         twoHanded: false
@@ -15,7 +15,7 @@ export const WeaponTypes = {
     katana: {
         name: 'Katana',
         type: 'melee',
-        range: 75,
+        range: 150,
         attackSpeed: 1.2,
         damageType: 'physical',
         critBonus: 10,
@@ -24,7 +24,7 @@ export const WeaponTypes = {
     dagger: {
         name: 'Dagger',
         type: 'melee',
-        range: 45,
+        range: 90,
         attackSpeed: 1.8,
         damageType: 'physical',
         critBonus: 15,
@@ -33,7 +33,7 @@ export const WeaponTypes = {
     axe: {
         name: 'Axe',
         type: 'melee',
-        range: 65,
+        range: 130,
         attackSpeed: 0.8,
         damageType: 'physical',
         cleave: true,
@@ -42,7 +42,7 @@ export const WeaponTypes = {
     hammer: {
         name: 'Hammer',
         type: 'melee',
-        range: 60,
+        range: 120,
         attackSpeed: 0.6,
         damageType: 'physical',
         stun: true,
@@ -51,7 +51,7 @@ export const WeaponTypes = {
     mace: {
         name: 'Mace',
         type: 'melee',
-        range: 60,
+        range: 120,
         attackSpeed: 0.9,
         damageType: 'physical',
         armorPierce: 0.2,
@@ -60,7 +60,7 @@ export const WeaponTypes = {
     lance: {
         name: 'Lance',
         type: 'melee',
-        range: 100,
+        range: 200,
         attackSpeed: 0.7,
         damageType: 'physical',
         chargeBonus: 2.0,
@@ -69,7 +69,7 @@ export const WeaponTypes = {
     rapier: {
         name: 'Rapier',
         type: 'melee',
-        range: 75,
+        range: 150,
         attackSpeed: 1.4,
         damageType: 'physical',
         critBonus: 5,
@@ -78,7 +78,7 @@ export const WeaponTypes = {
     scythe: {
         name: 'Scythe',
         type: 'melee',
-        range: 90,
+        range: 180,
         attackSpeed: 0.7,
         damageType: 'physical',
         lifeSteal: 0.1,
@@ -87,7 +87,7 @@ export const WeaponTypes = {
     naginata: {
         name: 'Naginata',
         type: 'melee',
-        range: 95,
+        range: 190,
         attackSpeed: 0.85,
         damageType: 'physical',
         sweep: true,
@@ -96,7 +96,7 @@ export const WeaponTypes = {
     kusarigama: {
         name: 'Kusarigama',
         type: 'melee',
-        range: 80,
+        range: 160,
         attackSpeed: 1.1,
         damageType: 'physical',
         pullEnemy: true,
