@@ -468,6 +468,27 @@ export class CombatManager {
         this.dungeon = dungeon;
     }
     
+    // Line of sight check - returns true if path between two points is clear of walls
+    hasLineOfSight(x1, y1, x2, y2) {
+        if (!this.dungeon) return true; // Default to true if no dungeon
+        
+        const steps = Math.max(Math.abs(x2 - x1), Math.abs(y2 - y1)) / 16;
+        if (steps < 1) return true;
+        
+        const dx = (x2 - x1) / steps;
+        const dy = (y2 - y1) / steps;
+        
+        for (let i = 1; i < steps; i++) {
+            const checkX = Math.floor((x1 + dx * i) / 32);
+            const checkY = Math.floor((y1 + dy * i) / 32);
+            const tile = this.dungeon.getTile ? this.dungeon.getTile(checkX, checkY) : 1;
+            if (tile === 2 || tile === 0) { // WALL or EMPTY
+                return false;
+            }
+        }
+        return true;
+    }
+    
     // Add particle effect
     addParticle(x, y, config) {
         this.particles.push({
@@ -1237,6 +1258,11 @@ export class CombatManager {
                 // Distance check from attack origin towards target
                 const dist = Math.sqrt((target.x - attack.x) ** 2 + (target.y - attack.y) ** 2);
                 if (dist < attack.range) {
+                    // Line of sight check - can't hit through walls
+                    if (!this.hasLineOfSight(attack.x, attack.y, target.x, target.y)) {
+                        continue;
+                    }
+                    
                     attack.hitEntities.add(target);
                     const damage = target.takeDamage ? target.takeDamage(attack.damage) : attack.damage;
                     this.combatResults.push({

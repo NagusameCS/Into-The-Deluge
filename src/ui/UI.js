@@ -194,6 +194,9 @@ export class HUD {
             ctx.fillText(`+${this.player.secondaryClass}`, 210, 95);
         }
         
+        // Potion counter
+        this.renderPotionCounter(ctx);
+        
         // Ability bar
         this.renderAbilityBar(ctx);
         
@@ -377,14 +380,65 @@ export class HUD {
         ctx.textAlign = 'left';
     }
     
+    renderPotionCounter(ctx) {
+        const potions = this.player.potions || { health: 0, mana: 0 };
+        const x = 10;
+        const y = 120;
+        
+        // Background
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+        ctx.fillRect(x, y, 120, 45);
+        
+        // Health potion
+        ctx.fillStyle = '#ff4444';
+        ctx.font = 'bold 14px Arial';
+        ctx.fillText('HP', x + 8, y + 18);
+        ctx.fillStyle = '#ffffff';
+        ctx.font = '14px Arial';
+        ctx.fillText(`x${potions.health || 0}`, x + 32, y + 18);
+        ctx.fillStyle = '#888888';
+        ctx.font = '10px Arial';
+        ctx.fillText('[R]', x + 65, y + 18);
+        
+        // Mana potion
+        ctx.fillStyle = '#4488ff';
+        ctx.font = 'bold 14px Arial';
+        ctx.fillText('MP', x + 8, y + 38);
+        ctx.fillStyle = '#ffffff';
+        ctx.font = '14px Arial';
+        ctx.fillText(`x${potions.mana || 0}`, x + 32, y + 38);
+        ctx.fillStyle = '#888888';
+        ctx.font = '10px Arial';
+        ctx.fillText('[F]', x + 65, y + 38);
+        
+        // Potion icons (simple shapes)
+        ctx.save();
+        // Health potion icon
+        ctx.fillStyle = '#ff6666';
+        ctx.beginPath();
+        ctx.roundRect(x + 90, y + 5, 12, 16, 2);
+        ctx.fill();
+        ctx.fillStyle = '#cc3333';
+        ctx.fillRect(x + 92, y + 3, 8, 4);
+        
+        // Mana potion icon
+        ctx.fillStyle = '#6688ff';
+        ctx.beginPath();
+        ctx.roundRect(x + 90, y + 25, 12, 16, 2);
+        ctx.fill();
+        ctx.fillStyle = '#3355cc';
+        ctx.fillRect(x + 92, y + 23, 8, 4);
+        ctx.restore();
+    }
+    
     renderBossBar(ctx) {
         const boss = this.boss;
         if (!boss) return;
         
-        const barWidth = this.canvas.width * 0.6;
-        const barHeight = 30;
+        const barWidth = this.canvas.width * 0.5;
+        const barHeight = 20;
         const x = (this.canvas.width - barWidth) / 2;
-        const y = this.canvas.height - 100;
+        const y = 50; // Top of screen
         
         const healthPercent = Math.max(0, boss.health / boss.maxHealth);
         const pulse = Math.sin(this.bossBarAnimation) * 0.1 + 0.9;
@@ -392,9 +446,9 @@ export class HUD {
         // Boss name title with shadow
         ctx.save();
         ctx.textAlign = 'center';
-        ctx.font = 'bold 28px Georgia';
+        ctx.font = 'bold 20px Georgia';
         ctx.fillStyle = '#000';
-        ctx.fillText(boss.name || 'Boss', this.canvas.width / 2 + 2, y - 20 + 2);
+        ctx.fillText(boss.name || 'Boss', this.canvas.width / 2 + 1, y - 12 + 1);
         
         // Gradient name based on element
         const elementColors = {
@@ -410,26 +464,26 @@ export class HUD {
         };
         const colors = elementColors[boss.bossElement] || elementColors.default;
         
-        const nameGradient = ctx.createLinearGradient(x, y - 40, x + barWidth, y - 20);
+        const nameGradient = ctx.createLinearGradient(x, y - 30, x + barWidth, y - 10);
         nameGradient.addColorStop(0, colors[0]);
         nameGradient.addColorStop(0.5, '#ffffff');
         nameGradient.addColorStop(1, colors[1]);
         ctx.fillStyle = nameGradient;
-        ctx.fillText(boss.name || 'Boss', this.canvas.width / 2, y - 20);
+        ctx.fillText(boss.name || 'Boss', this.canvas.width / 2, y - 12);
         
         // Outer frame with glow
         ctx.shadowColor = colors[0];
-        ctx.shadowBlur = 15 * pulse;
+        ctx.shadowBlur = 10 * pulse;
         ctx.fillStyle = '#1a1a2e';
         ctx.beginPath();
-        ctx.roundRect(x - 5, y - 5, barWidth + 10, barHeight + 10, 8);
+        ctx.roundRect(x - 4, y - 4, barWidth + 8, barHeight + 8, 6);
         ctx.fill();
         ctx.shadowBlur = 0;
         
         // Inner background
         ctx.fillStyle = '#0a0a14';
         ctx.beginPath();
-        ctx.roundRect(x, y, barWidth, barHeight, 5);
+        ctx.roundRect(x, y, barWidth, barHeight, 4);
         ctx.fill();
         
         // Health bar gradient
@@ -458,37 +512,37 @@ export class HUD {
         
         // Border with decorative ends
         ctx.strokeStyle = colors[0];
-        ctx.lineWidth = 3;
+        ctx.lineWidth = 2;
         ctx.beginPath();
-        ctx.roundRect(x, y, barWidth, barHeight, 5);
+        ctx.roundRect(x, y, barWidth, barHeight, 4);
         ctx.stroke();
         
-        // Decorative corner pieces
+        // Decorative corner pieces (smaller)
         ctx.fillStyle = colors[0];
         // Left corner
         ctx.beginPath();
-        ctx.moveTo(x - 10, y + barHeight / 2);
+        ctx.moveTo(x - 6, y + barHeight / 2);
         ctx.lineTo(x, y);
         ctx.lineTo(x, y + barHeight);
         ctx.closePath();
         ctx.fill();
         // Right corner
         ctx.beginPath();
-        ctx.moveTo(x + barWidth + 10, y + barHeight / 2);
+        ctx.moveTo(x + barWidth + 6, y + barHeight / 2);
         ctx.lineTo(x + barWidth, y);
         ctx.lineTo(x + barWidth, y + barHeight);
         ctx.closePath();
         ctx.fill();
         
         // Health percentage text
-        ctx.font = 'bold 16px Arial';
+        ctx.font = 'bold 12px Arial';
         ctx.fillStyle = '#fff';
-        ctx.fillText(`${Math.floor(healthPercent * 100)}%`, this.canvas.width / 2, y + barHeight - 8);
+        ctx.fillText(`${Math.floor(healthPercent * 100)}%`, this.canvas.width / 2, y + barHeight - 5);
         
-        // HP numbers
-        ctx.font = '12px Arial';
+        // HP numbers (smaller and below)
+        ctx.font = '10px Arial';
         ctx.fillStyle = '#aaa';
-        ctx.fillText(`${Math.floor(boss.health)} / ${Math.floor(boss.maxHealth)}`, this.canvas.width / 2, y + barHeight + 15);
+        ctx.fillText(`${Math.floor(boss.health)} / ${Math.floor(boss.maxHealth)}`, this.canvas.width / 2, y + barHeight + 12);
         
         ctx.restore();
     }

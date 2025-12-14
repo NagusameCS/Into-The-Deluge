@@ -275,6 +275,7 @@ export class Enemy extends Entity {
             this.lastActionTime = 0;
             this.patternTimeout = 0; // Timeout to prevent stuck patterns
             this.phasesTriggered = [];
+            this.unlockedPhases = [1]; // Track unlocked phases for progressive moves
             this.patternHistory = []; // Track last 5 patterns to avoid repetition
             this.combatMode = 'balanced'; // 'melee', 'ranged', or 'balanced'
             this.combatModeTimer = 0; // Time until mode switch
@@ -732,6 +733,9 @@ export class Enemy extends Entity {
         // Build pattern pool based on phase
         let patterns = [...projectilePatterns.slice(0, 5), ...meleePatterns.slice(0, 4), ...specialPatterns.slice(0, 3)];
         
+        // Ring collapse pattern - available from the start (signature boss move)
+        patterns.push('ringCollapse');
+        
         // Phase 2 unlocks more
         if (this.bossPhase >= 2) {
             patterns.push(...projectilePatterns.slice(5));
@@ -972,9 +976,21 @@ export class Enemy extends Entity {
     // Trigger phase transition with mob spawn and heal
     triggerPhaseTransition(newPhase) {
         this.bossPhase = newPhase;
+        this.bossStage = newPhase; // Sync stage with phase
         this.isHealingPhase = true;
         this.healingMinions = [];
         this.healRate = this.maxHealth * 0.02; // 2% max health per second while minions alive
+        
+        // Track unlocked phases for progressive move unlocking
+        if (!this.unlockedPhases) {
+            this.unlockedPhases = [1]; // Phase 1 always unlocked
+        }
+        if (!this.unlockedPhases.includes(newPhase)) {
+            this.unlockedPhases.push(newPhase);
+        }
+        
+        // Heal to full health on phase transition
+        this.health = this.maxHealth;
         
         // Spawn 10 minions around the boss
         this.pendingMobSpawn = {
@@ -1356,6 +1372,81 @@ export class Enemy extends Entity {
                 }
                 this.endBossPattern();
                 break;
+            
+            case 'ringCollapse':
+                // Creates a full ring of projectiles around the boss that all fly toward the player's position
+                if (this.patternStep === 0) {
+                    // Setup phase - stop movement and lock player position
+                    this.velocity.x = 0;
+                    this.velocity.y = 0;
+                    this.patternData.timer = 0;
+                    this.patternData.lockedTargetX = this.target.x; // Lock player position NOW
+                    this.patternData.lockedTargetY = this.target.y;
+                    this.patternData.ringRadius = 100 + Math.random() * 50;
+                    this.patternData.projectileCount = 16 + Math.floor(Math.random() * 8); // 16-24 projectiles for full ring
+                    this.patternData.projectilesSpawned = [];
+                    
+                    // Telegraph - show where ring will form
+                    this.showTelegraph = true;
+                    this.telegraphRadius = this.patternData.ringRadius;
+                    this.telegraphColor = 'rgba(255, 100, 100, 0.3)';
+                    
+                    this.patternStep = 1;
+                } else if (this.patternStep === 1) {
+                    // Spawn projectiles in a full circle around the boss
+                    this.patternData.timer += dt;
+                    
+                    if (this.patternData.timer > 0.5) { // 0.5 second wind-up
+                        const count = this.patternData.projectileCount;
+                        const radius = this.patternData.ringRadius;
+                        
+                        // Create all projectiles at once for a complete ring
+                        for (let i = 0; i < count; i++) {
+                            const angle = (i / count) * Math.PI * 2; // Full 360 degrees
+                            const spawnX = this.x + Math.cos(angle) * radius;
+                            const spawnY = this.y + Math.sin(angle) * radius;
+                            
+                            this.patternData.projectilesSpawned.push({
+                                x: spawnX,
+                                y: spawnY,
+                                angle: angle
+                            });
+                        }
+                        
+                        this.patternData.timer = 0;
+                        this.patternStep = 2;
+                    }
+                } else if (this.patternStep === 2) {
+                    // Brief pause with projectiles visible at ring positions
+                    this.patternData.timer += dt;
+                    
+                    if (this.patternData.timer > 0.3) { // 0.3 second pause before firing
+                        // Fire all projectiles toward the LOCKED player position using pendingAttacks array
+                        const targetX = this.patternData.lockedTargetX;
+                        const targetY = this.patternData.lockedTargetY;
+                        
+                        // Initialize pendingAttacks array if needed
+                        if (!this.pendingAttacks) this.pendingAttacks = [];
+                        
+                        for (const proj of this.patternData.projectilesSpawned) {
+                            this.pendingAttacks.push({
+                                type: 'projectile',
+                                damage: this.damage * 0.3,
+                                x: proj.x,
+                                y: proj.y,
+                                targetX: targetX, // All projectiles converge on locked position
+                                targetY: targetY,
+                                speed: 280,
+                                element: this.bossElement || 'fire',
+                                owner: this
+                            });
+                        }
+                        
+                        this.showTelegraph = false;
+                        this.endBossPattern();
+                    }
+                }
+                break;
                 
             case 'omniDirectional':
                 // Multiple waves of all-direction projectiles
@@ -1372,9 +1463,12 @@ export class Enemy extends Entity {
                     const projectiles = 20; // More projectiles per wave
                     const angleOffset = this.patternData.waves * 0.15; // Rotate each wave
                     
+                    // Use pendingAttacks array for all projectiles at once
+                    if (!this.pendingAttacks) this.pendingAttacks = [];
+                    
                     for (let i = 0; i < projectiles; i++) {
                         const angle = angleOffset + (i / projectiles) * Math.PI * 2;
-                        this.pendingAttack = {
+                        this.pendingAttacks.push({
                             type: 'projectile',
                             damage: this.damage * 0.35,
                             x: this.x,
@@ -1383,7 +1477,7 @@ export class Enemy extends Entity {
                             targetY: this.y + Math.sin(angle) * 200,
                             speed: 300,
                             owner: this
-                        };
+                        });
                     }
                     
                     if (this.patternData.waves >= 7) { // More waves
@@ -3822,9 +3916,12 @@ export class Enemy extends Entity {
                         const radius = 50 + this.patternData.waves * 70;
                         const count = 8 + this.patternData.waves * 4;
                         
+                        // Use pendingAttacks array for all projectiles
+                        if (!this.pendingAttacks) this.pendingAttacks = [];
+                        
                         for (let i = 0; i < count; i++) {
                             const angle = (i / count) * Math.PI * 2 + (this.patternData.waves % 2) * (Math.PI / count);
-                            this.pendingAttack = {
+                            this.pendingAttacks.push({
                                 type: 'projectile',
                                 damage: this.damage * 0.25,
                                 x: this.x,
@@ -3834,7 +3931,7 @@ export class Enemy extends Entity {
                                 speed: 180 + this.patternData.waves * 30,
                                 element: 'holy',
                                 owner: this
-                            };
+                            });
                         }
                         
                         if (this.patternData.waves >= 5) {
@@ -3857,9 +3954,12 @@ export class Enemy extends Entity {
                 } else if (this.patternStep === 1) {
                     this.patternData.timer += dt;
                     if (this.patternData.timer > 0.3) {
+                        // Use pendingAttacks array for all lasers
+                        if (!this.pendingAttacks) this.pendingAttacks = [];
+                        
                         // Horizontal lasers
                         for (let i = -3; i <= 3; i++) {
-                            this.pendingAttack = {
+                            this.pendingAttacks.push({
                                 type: 'projectile',
                                 damage: this.damage * 0.3,
                                 x: this.x - 300,
@@ -3869,11 +3969,11 @@ export class Enemy extends Entity {
                                 speed: 400,
                                 element: 'electric',
                                 owner: this
-                            };
+                            });
                         }
                         // Vertical lasers
                         for (let i = -3; i <= 3; i++) {
-                            this.pendingAttack = {
+                            this.pendingAttacks.push({
                                 type: 'projectile',
                                 damage: this.damage * 0.3,
                                 x: this.x + i * 60,
@@ -3883,7 +3983,7 @@ export class Enemy extends Entity {
                                 speed: 400,
                                 element: 'electric',
                                 owner: this
-                            };
+                            });
                         }
                         this.endBossPattern();
                     }

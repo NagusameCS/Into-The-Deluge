@@ -257,8 +257,8 @@ class GameScene extends Scene {
     
     generateDungeon() {
         // Determine floor theme based on current floor
-        // Each theme covers multiple floors before cycling
-        this.floorThemeIndex = Math.floor((this.currentFloor - 1) / 2) % FLOOR_ORDER.length;
+        // Each floor gets a unique boss before cycling through again
+        this.floorThemeIndex = (this.currentFloor - 1) % FLOOR_ORDER.length;
         this.currentFloorTheme = FLOOR_ORDER[this.floorThemeIndex];
         const theme = FLOOR_THEMES[this.currentFloorTheme];
         
@@ -864,7 +864,7 @@ class GameScene extends Scene {
                 enemy.pendingStatusVisual = null;
             }
             
-            // Enemy attacks
+            // Enemy attacks - support both single attack and array of attacks
             if (enemy.pendingAttack) {
                 // Add boss element to ALL attacks for colored effects
                 if (enemy.isBoss && enemy.bossElement && !enemy.pendingAttack.element) {
@@ -872,6 +872,17 @@ class GameScene extends Scene {
                 }
                 this.combatManager.addAttack(enemy.pendingAttack, enemy);
                 enemy.pendingAttack = null;
+            }
+            
+            // Handle array of pending attacks (for multi-projectile patterns)
+            if (enemy.pendingAttacks && enemy.pendingAttacks.length > 0) {
+                for (const attack of enemy.pendingAttacks) {
+                    if (enemy.isBoss && enemy.bossElement && !attack.element) {
+                        attack.element = enemy.bossElement;
+                    }
+                    this.combatManager.addAttack(attack, enemy);
+                }
+                enemy.pendingAttacks = [];
             }
             
             // Boss phase transition mob spawning - spawns around entire arena
@@ -3336,6 +3347,47 @@ class GameScene extends Scene {
             ctx.moveTo(-bodyW/2 - 5, 2);
             ctx.lineTo(-bodyW/2 - 12, 2);
             ctx.stroke();
+        }
+        
+        // Shield/Defense buff visual effect
+        if (p.hasStatusEffect && p.hasStatusEffect('defense_up')) {
+            const shieldPulse = Math.sin(time * 4) * 0.15 + 0.85;
+            const shieldRadius = Math.max(bodyW, bodyH) * 0.9 + 8;
+            
+            // Outer glow
+            ctx.save();
+            ctx.shadowColor = '#66ccff';
+            ctx.shadowBlur = 20 * shieldPulse;
+            
+            // Shield bubble
+            ctx.strokeStyle = `rgba(100, 200, 255, ${0.6 * shieldPulse})`;
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            ctx.arc(0, 0, shieldRadius, 0, Math.PI * 2);
+            ctx.stroke();
+            
+            // Inner glow ring
+            ctx.strokeStyle = `rgba(150, 220, 255, ${0.4 * shieldPulse})`;
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.arc(0, 0, shieldRadius - 4, 0, Math.PI * 2);
+            ctx.stroke();
+            
+            // Hexagon overlay for magical feel
+            ctx.strokeStyle = `rgba(200, 240, 255, ${0.3 * shieldPulse})`;
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            for (let i = 0; i < 6; i++) {
+                const angle = (i / 6) * Math.PI * 2 + time * 0.5;
+                const hx = Math.cos(angle) * shieldRadius * 0.8;
+                const hy = Math.sin(angle) * shieldRadius * 0.8;
+                if (i === 0) ctx.moveTo(hx, hy);
+                else ctx.lineTo(hx, hy);
+            }
+            ctx.closePath();
+            ctx.stroke();
+            
+            ctx.restore();
         }
         
         ctx.restore();
