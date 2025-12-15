@@ -982,6 +982,13 @@ export class Character extends Entity {
     takeDamage(amount, source = null) {
         if (this.invulnerable) return 0;
         
+        // Check for active parry window - perfect block
+        if (this.isParrying && this.parryWindow > 0) {
+            this.onParrySuccess(source);
+            this.pendingStatusVisual = { type: 'parry_success' };
+            return 0;
+        }
+        
         // Check for active shield (blocks hits completely)
         if (this.hasStatusEffect && this.hasStatusEffect('shield_active')) {
             // Get the shield effect and decrement hits
@@ -995,6 +1002,53 @@ export class Character extends Entity {
                     // Shield absorbed the hit
                     this.pendingStatusVisual = { type: 'shield_block' };
                     return 0;
+                }
+            }
+        }
+        
+        // Check for damage absorption shield (absorbs % of damage)
+        if (this.hasStatusEffect && this.hasStatusEffect('shield_absorb')) {
+            if (this.statusEffects instanceof Map) {
+                const absorbShield = this.statusEffects.get('shield_absorb');
+                if (absorbShield && absorbShield.value > 0) {
+                    // Absorb damage from shield pool
+                    const absorbed = Math.min(absorbShield.value, amount);
+                    absorbShield.value -= absorbed;
+                    amount -= absorbed;
+                    
+                    if (absorbShield.value <= 0) {
+                        this.statusEffects.delete('shield_absorb');
+                    }
+                    
+                    // Show partial block visual
+                    if (amount <= 0) {
+                        this.pendingStatusVisual = { type: 'shield_block' };
+                        return 0;
+                    }
+                }
+            }
+        }
+        
+        // Check for mana shield (uses mana to block damage)
+        if (this.hasStatusEffect && this.hasStatusEffect('mana_shield')) {
+            if (this.statusEffects instanceof Map) {
+                const manaShield = this.statusEffects.get('mana_shield');
+                if (manaShield && this.mana > 0) {
+                    // Convert damage to mana cost at ratio
+                    const ratio = manaShield.value || 0.5; // 0.5 = 1 damage costs 0.5 mana
+                    const manaCost = amount * ratio;
+                    
+                    if (this.mana >= manaCost) {
+                        // Full block
+                        this.mana -= manaCost;
+                        this.pendingStatusVisual = { type: 'mana_shield_block' };
+                        return 0;
+                    } else {
+                        // Partial block - use remaining mana
+                        const blockedDamage = this.mana / ratio;
+                        amount -= blockedDamage;
+                        this.mana = 0;
+                    }
                 }
             }
         }

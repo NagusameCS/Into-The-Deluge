@@ -377,6 +377,25 @@ export class SoundManager {
         this.play('musketShot', 0.6);
     }
     
+    // Play NPC female interaction sound
+    playNPCFemale() {
+        this.play('npcFemale', 0.6);
+    }
+    
+    // Play NPC male interaction sound
+    playNPCMale() {
+        this.play('npcMale', 0.6);
+    }
+    
+    // Play random NPC sound (male or female)
+    playNPCInteract(isFemale = Math.random() > 0.5) {
+        if (isFemale) {
+            this.playNPCFemale();
+        } else {
+            this.playNPCMale();
+        }
+    }
+    
     // Play sound by name (for class-specific sounds)
     playSound(soundName, volume = 0.5) {
         this.play(soundName, volume);

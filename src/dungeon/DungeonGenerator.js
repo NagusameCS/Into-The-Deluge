@@ -143,6 +143,9 @@ export class DungeonGenerator {
         // Place special tiles
         this.placeSpecialTiles(floor);
         
+        // Generate hidden rooms
+        this.generateHiddenRooms(floor);
+        
         // Place torches and dungeon core
         this.placeTorchesAndCore(floor);
         
@@ -170,6 +173,7 @@ export class DungeonGenerator {
             startRoom: this.startRoom,
             bossRoom: this.bossRoom,
             coreRoom: coreRoom,
+            hiddenRooms: this.hiddenRooms || [],
             torchPositions: torchPositions,
             corePosition: corePosition,
             coreDoorPosition: coreDoorPosition,
@@ -1123,6 +1127,195 @@ export class DungeonGenerator {
                 }
             }
         }
+    }
+    
+    generateHiddenRooms(floor) {
+        // Hidden rooms are secret rooms attached to normal rooms
+        // They contain rare loot and are revealed by finding breakable walls
+        
+        this.hiddenRooms = [];
+        
+        // Chance of hidden room per normal room increases with floor
+        const hiddenRoomChance = Math.min(0.3, 0.1 + floor * 0.02);
+        
+        // Find eligible rooms (not start, boss, or core)
+        const eligibleRooms = this.rooms.filter(room => 
+            room !== this.startRoom && room !== this.bossRoom && room !== this.coreRoom
+        );
+        
+        for (const room of eligibleRooms) {
+            if (Math.random() > hiddenRoomChance) continue;
+            
+            // Pick a random wall side (0=top, 1=right, 2=bottom, 3=left)
+            const sides = [0, 1, 2, 3].sort(() => Math.random() - 0.5);
+            
+            for (const side of sides) {
+                const hiddenRoom = this.tryPlaceHiddenRoom(room, side, floor);
+                if (hiddenRoom) {
+                    this.hiddenRooms.push(hiddenRoom);
+                    break; // Only one hidden room per normal room
+                }
+            }
+        }
+    }
+    
+    tryPlaceHiddenRoom(parentRoom, side, floor) {
+        // Hidden room size (small, 5x5 to 8x8)
+        const width = Utils.randomInt(5, 8);
+        const height = Utils.randomInt(5, 8);
+        
+        let hiddenX, hiddenY, doorX, doorY;
+        
+        switch (side) {
+            case 0: // Top
+                hiddenX = parentRoom.centerX - Math.floor(width / 2);
+                hiddenY = parentRoom.y - height - 1;
+                doorX = parentRoom.centerX;
+                doorY = parentRoom.y - 1;
+                break;
+            case 1: // Right
+                hiddenX = parentRoom.x + parentRoom.width + 1;
+                hiddenY = parentRoom.centerY - Math.floor(height / 2);
+                doorX = parentRoom.x + parentRoom.width;
+                doorY = parentRoom.centerY;
+                break;
+            case 2: // Bottom
+                hiddenX = parentRoom.centerX - Math.floor(width / 2);
+                hiddenY = parentRoom.y + parentRoom.height + 1;
+                doorX = parentRoom.centerX;
+                doorY = parentRoom.y + parentRoom.height;
+                break;
+            case 3: // Left
+                hiddenX = parentRoom.x - width - 1;
+                hiddenY = parentRoom.centerY - Math.floor(height / 2);
+                doorX = parentRoom.x - 1;
+                doorY = parentRoom.centerY;
+                break;
+        }
+        
+        // Check bounds
+        if (hiddenX < 2 || hiddenY < 2 || 
+            hiddenX + width >= this.width - 2 || 
+            hiddenY + height >= this.height - 2) {
+            return null;
+        }
+        
+        // Check if area is clear (all void)
+        for (let y = hiddenY - 1; y <= hiddenY + height; y++) {
+            for (let x = hiddenX - 1; x <= hiddenX + width; x++) {
+                if (!this.isInBounds(x, y)) return null;
+                if (this.tiles[y][x] !== this.TILES.VOID) return null;
+            }
+        }
+        
+        // Place the hidden room floor
+        for (let y = hiddenY; y < hiddenY + height; y++) {
+            for (let x = hiddenX; x < hiddenX + width; x++) {
+                this.tiles[y][x] = this.TILES.FLOOR;
+            }
+        }
+        
+        // Add walls around the hidden room
+        for (let y = hiddenY - 1; y <= hiddenY + height; y++) {
+            for (let x = hiddenX - 1; x <= hiddenX + width; x++) {
+                if (this.tiles[y][x] === this.TILES.VOID) {
+                    this.tiles[y][x] = this.TILES.WALL;
+                }
+            }
+        }
+        
+        // Create the secret passage (breakable wall)
+        // Mark it as a special breakable wall tile
+        if (this.isInBounds(doorX, doorY)) {
+            // Use WALL but mark as breakable (we'll track these separately)
+            this.tiles[doorY][doorX] = this.TILES.WALL;
+        }
+        
+        // Create short corridor to hidden room
+        let corridorX = doorX, corridorY = doorY;
+        switch (side) {
+            case 0: // Top - corridor goes up
+                for (let y = doorY; y >= hiddenY + height - 1; y--) {
+                    if (this.isInBounds(corridorX, y)) {
+                        if (y === doorY) {
+                            // Keep as breakable wall (entry)
+                        } else {
+                            this.tiles[y][corridorX] = this.TILES.FLOOR;
+                        }
+                    }
+                }
+                break;
+            case 1: // Right - corridor goes right
+                for (let x = doorX; x <= hiddenX; x++) {
+                    if (this.isInBounds(x, corridorY)) {
+                        if (x === doorX) {
+                            // Keep as breakable wall
+                        } else {
+                            this.tiles[corridorY][x] = this.TILES.FLOOR;
+                        }
+                    }
+                }
+                break;
+            case 2: // Bottom - corridor goes down
+                for (let y = doorY; y <= hiddenY; y++) {
+                    if (this.isInBounds(corridorX, y)) {
+                        if (y === doorY) {
+                            // Keep as breakable wall
+                        } else {
+                            this.tiles[y][corridorX] = this.TILES.FLOOR;
+                        }
+                    }
+                }
+                break;
+            case 3: // Left - corridor goes left
+                for (let x = doorX; x >= hiddenX + width - 1; x--) {
+                    if (this.isInBounds(x, corridorY)) {
+                        if (x === doorX) {
+                            // Keep as breakable wall
+                        } else {
+                            this.tiles[corridorY][x] = this.TILES.FLOOR;
+                        }
+                    }
+                }
+                break;
+        }
+        
+        // Place treasure in hidden room
+        const centerX = hiddenX + Math.floor(width / 2);
+        const centerY = hiddenY + Math.floor(height / 2);
+        
+        // Always place a chest in hidden rooms
+        if (this.isInBounds(centerX, centerY)) {
+            this.tiles[centerY][centerX] = this.TILES.CHEST;
+        }
+        
+        // Sometimes add an extra chest
+        if (Math.random() < 0.3 + floor * 0.05) {
+            const extraX = hiddenX + Utils.randomInt(1, width - 2);
+            const extraY = hiddenY + Utils.randomInt(1, height - 2);
+            if (this.tiles[extraY][extraX] === this.TILES.FLOOR) {
+                this.tiles[extraY][extraX] = this.TILES.CHEST;
+            }
+        }
+        
+        const hiddenRoom = {
+            x: hiddenX,
+            y: hiddenY,
+            width: width,
+            height: height,
+            centerX: centerX,
+            centerY: centerY,
+            parentRoom: parentRoom,
+            entranceX: doorX,
+            entranceY: doorY,
+            isHidden: true,
+            isRevealed: false
+        };
+        
+        // Add to rooms array so spawn points can be generated
+        this.rooms.push(hiddenRoom);
+        
+        return hiddenRoom;
     }
     
     placeTorchesAndCore(floor) {

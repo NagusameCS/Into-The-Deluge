@@ -23,6 +23,14 @@ export class Projectile extends Entity {
         this.distanceTraveled = 0;
         this.hitEntities = new Set();
         
+        // Infinite range for player projectiles (musketeer, arrows, etc.)
+        this.infiniteRange = config.infiniteRange || false;
+        
+        // Magic bouncing off walls
+        this.bounces = config.bounces || 0; // Number of wall bounces remaining
+        this.maxBounces = config.maxBounces || 0;
+        this.isMagic = config.isMagic || false;
+        
         // Visual
         this.width = config.width || 8;
         this.height = config.height || 8;
@@ -38,9 +46,63 @@ export class Projectile extends Entity {
         
         this.addTag('projectile');
         
+        // Store if owner is player for infinite range
+        this.isPlayerProjectile = config.isPlayerProjectile || false;
+        
         // Set initial velocity
         this.velocity.x = Math.cos(angle) * this.speed;
         this.velocity.y = Math.sin(angle) * this.speed;
+    }
+    
+    // Check and handle wall collision with bouncing
+    checkWallBounce(dungeon, tileSize = 32) {
+        if (!dungeon || !dungeon.tiles) return false;
+        
+        const tileX = Math.floor(this.x / tileSize);
+        const tileY = Math.floor(this.y / tileSize);
+        
+        // Check if inside a wall
+        if (tileY >= 0 && tileY < dungeon.tiles.length && 
+            tileX >= 0 && tileX < dungeon.tiles[0].length) {
+            const tile = dungeon.tiles[tileY][tileX];
+            
+            // TILE_TYPES.WALL = 1
+            if (tile === 1) {
+                if (this.bounces > 0 && this.isMagic) {
+                    this.bounces--;
+                    
+                    // Determine bounce direction based on which edge we hit
+                    const prevTileX = Math.floor((this.x - this.velocity.x * 0.016) / tileSize);
+                    const prevTileY = Math.floor((this.y - this.velocity.y * 0.016) / tileSize);
+                    
+                    if (prevTileX !== tileX) {
+                        // Hit from left or right - reflect X
+                        this.velocity.x *= -1;
+                        this.angle = Math.atan2(this.velocity.y, this.velocity.x);
+                    }
+                    if (prevTileY !== tileY) {
+                        // Hit from top or bottom - reflect Y
+                        this.velocity.y *= -1;
+                        this.angle = Math.atan2(this.velocity.y, this.velocity.x);
+                    }
+                    
+                    // Move back out of wall
+                    this.x -= this.velocity.x * 0.016;
+                    this.y -= this.velocity.y * 0.016;
+                    
+                    return true;
+                } else if (!this.isMagic && !this.infiniteRange) {
+                    // Non-magic projectiles die on wall hit (unless infinite range)
+                    this.destroy();
+                    return true;
+                } else if (this.isMagic && this.bounces <= 0) {
+                    // Magic with no bounces left dies
+                    this.destroy();
+                    return true;
+                }
+            }
+        }
+        return false;
     }
     
     update(dt) {
@@ -72,10 +134,21 @@ export class Projectile extends Entity {
         const moved = Math.sqrt(this.velocity.x ** 2 + this.velocity.y ** 2) * dt;
         this.distanceTraveled += moved;
         
-        // Check lifetime
+        // Check lifetime and distance
+        // Player projectiles with infinite range only die on wall hit or going off-map
         this.lifetime -= dt;
-        if (this.lifetime <= 0 || this.distanceTraveled >= this.maxDistance) {
-            this.destroy();
+        
+        if (this.infiniteRange || this.isPlayerProjectile) {
+            // Infinite range projectiles only die after very long lifetime (60 seconds)
+            // or if they go way off the map
+            if (this.lifetime <= -60 || this.distanceTraveled >= 50000) {
+                this.destroy();
+            }
+        } else {
+            // Normal projectiles die based on lifetime or distance
+            if (this.lifetime <= 0 || this.distanceTraveled >= this.maxDistance) {
+                this.destroy();
+            }
         }
     }
     
@@ -584,6 +657,9 @@ export class CombatManager {
             const vx = (dx / dist) * speed;
             const vy = (dy / dist) * speed;
             
+            // Check if this is a player projectile (players have className)
+            const isPlayerProjectile = owner && owner.className;
+            
             const arrow = {
                 owner: owner,
                 x: attackData.x,
@@ -591,10 +667,11 @@ export class CombatManager {
                 vx: vx,
                 vy: vy,
                 damage: attackData.damage || 25,
-                range: attackData.range || 350,
+                range: isPlayerProjectile ? 50000 : (attackData.range || 350), // Infinite range for player
                 distanceTraveled: 0,
                 size: 16,
                 isArrow: true,
+                isPlayerProjectile: isPlayerProjectile,
                 element: 'physical',
                 rotation: Math.atan2(dy, dx),
                 isCrit: attackData.isCrit,
@@ -623,6 +700,9 @@ export class CombatManager {
             const vy = (dy / dist) * speed;
             const angle = Math.atan2(dy, dx);
             
+            // Musketeer always has infinite range
+            const isPlayerProjectile = owner && owner.className;
+            
             const bullet = {
                 owner: owner,
                 x: attackData.x + Math.cos(angle) * 20, // Start from muzzle
@@ -630,14 +710,15 @@ export class CombatManager {
                 vx: vx,
                 vy: vy,
                 damage: attackData.damage || 40,
-                range: attackData.range || 320,
+                range: isPlayerProjectile ? 50000 : (attackData.range || 320), // Infinite range for player
                 distanceTraveled: 0,
                 size: 8,
                 isMusketBullet: true,
+                isPlayerProjectile: isPlayerProjectile,
                 element: 'physical',
                 rotation: angle,
                 isCrit: attackData.isCrit,
-                lifetime: 2,
+                lifetime: isPlayerProjectile ? 60 : 2, // Very long lifetime for player projectiles
                 trail: []
             };
             
@@ -686,6 +767,11 @@ export class CombatManager {
             const angle = Math.atan2(dy, dx);
             const speed = attackData.speed || 400;
             
+            // Check if this is a player magic projectile (players have className)
+            const isPlayerProjectile = owner && owner.className;
+            // Check if this is a magic/elemental projectile
+            const isMagic = attackData.element && attackData.element !== 'physical' && attackData.element !== 'none';
+            
             const projectile = {
                 owner: owner,
                 damage: attackData.damage || 10,
@@ -694,7 +780,7 @@ export class CombatManager {
                 vx: Math.cos(angle) * speed,
                 vy: Math.sin(angle) * speed,
                 angle: angle,
-                lifetime: 2,
+                lifetime: isPlayerProjectile ? 30 : 2, // Longer lifetime for player
                 width: attackData.width || 12,
                 height: attackData.height || 12,
                 element: attackData.element || 'none',
@@ -702,7 +788,12 @@ export class CombatManager {
                 trail: [],
                 orbs: [], // Orbiting particles for spells
                 pulseTimer: 0,
-                spin: attackData.spin || 0
+                spin: attackData.spin || 0,
+                // Player magic bounces off 3 walls before disappearing
+                isMagic: isMagic,
+                isPlayerProjectile: isPlayerProjectile,
+                bounces: (isPlayerProjectile && isMagic) ? 3 : 0,
+                maxBounces: (isPlayerProjectile && isMagic) ? 3 : 0
             };
             
             // Add orbiting orbs for magic projectiles

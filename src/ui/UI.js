@@ -161,6 +161,19 @@ export class HUD {
             `SP: ${Math.floor(this.player.stamina)}/${this.player.maxStamina}`
         );
         
+        // Shield bar (if player has shield active)
+        if (this.player.hasStatusEffect && this.player.hasStatusEffect('shield_active')) {
+            const shieldValue = this.player.getStatusEffectValue ? 
+                this.player.getStatusEffectValue('shield_active') : 0;
+            // Shield bar shows hits remaining (max 10 for display)
+            const maxShieldDisplay = 10;
+            this.drawBar(ctx, 20, 81, 180, 12,
+                shieldValue / maxShieldDisplay,
+                '#66ccff', '#224466',
+                `🛡️ Shield: ${shieldValue} hits`
+            );
+        }
+        
         // Experience bar
         this.drawBar(ctx, 20, 85, 180, 10,
             this.player.experience / this.player.experienceToLevel,

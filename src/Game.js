@@ -17,6 +17,8 @@ import { DungeonGenerator, DungeonRenderer, TILE_TYPES } from './dungeon/Dungeon
 import { PuzzleFactory } from './dungeon/Puzzles.js';
 import { PuzzleUI } from './ui/PuzzleUI.js';
 import { UIManager, HUD, SkillTreePanel, InventoryPanel, ClassSelectionUI, PauseMenu } from './ui/UI.js';
+import { MarketLayout, MarketBuilding, MarketNPC, Mercenary, FortuneReading, ArenaChallenge, GuildQuest, BUILDING_TYPES, NPC_TYPES } from './market/Market.js';
+import MarketUI from './ui/MarketUI.js';
 
 // Game states
 const GameState = {
@@ -25,7 +27,8 @@ const GameState = {
     PLAYING: 'playing',
     PAUSED: 'paused',
     DEAD: 'dead',
-    VICTORY: 'victory'
+    VICTORY: 'victory',
+    MARKET: 'market'
 };
 
 // Player Controller - handles input and controls the character
@@ -487,18 +490,22 @@ class GameScene extends Scene {
     }
     
     advanceToNextFloor() {
-        // Advance to next floor after defeating core boss
-        this.currentFloor++;
-        this.uiManager.addNotification(`Descending to floor ${this.currentFloor}...`, 'legendary');
+        // Signal transition to market floor instead of directly generating new dungeon
+        // The market floor will handle healing and then transition to next combat floor
+        this.goToMarket = true;
+        this.uiManager.addNotification('Entering the market...', 'legendary');
         this.camera.shake(10, 0.5);
+    }
+    
+    // Called when returning from market to continue to next floor
+    continueFromMarket() {
+        this.currentFloor++;
+        this.goToMarket = false;
         
         // Generate new dungeon (this will set new floor theme)
         this.generateDungeon();
         
-        // Full heal on floor completion as reward
-        this.player.health = Math.min(this.player.maxHealth, this.player.health + Math.floor(this.player.maxHealth * 0.5));
-        this.soundManager.playHeal();
-        this.uiManager.addNotification(`Recovered 50% HP!`, 'heal');
+        this.uiManager.addNotification(`Descended to floor ${this.currentFloor}!`, 'legendary');
     }
     
     openChest(tileX, tileY) {
@@ -4716,6 +4723,726 @@ class GameScene extends Scene {
     }
 }
 
+// Market Scene - Shopping floor between combat floors
+class MarketScene extends Scene {
+    constructor(engine, player, currentFloor, floorTheme) {
+        super();
+        this.engine = engine;
+        this.player = player;
+        this.currentFloor = currentFloor;
+        this.floorTheme = floorTheme;
+        
+        // Sound manager
+        this.soundManager = new SoundManager();
+        
+        // Create market layout themed after previous floor
+        this.marketLayout = new MarketLayout(floorTheme);
+        
+        // Create market UI
+        this.marketUI = new MarketUI(engine.canvas, this.player, this.marketLayout, this.soundManager);
+        
+        // Market dimensions (tile-based)
+        this.tileSize = 32;
+        this.marketWidth = 40;
+        this.marketHeight = 30;
+        
+        // Player position in market (starts at entrance)
+        this.player.x = this.marketWidth * this.tileSize / 2;
+        this.player.y = (this.marketHeight - 3) * this.tileSize;
+        
+        // Mercenary companion (if any)
+        this.mercenary = player.mercenary || null;
+        if (this.mercenary) {
+            this.mercenary.x = this.player.x + 40;
+            this.mercenary.y = this.player.y;
+        }
+        
+        // NPCs in the market
+        this.npcs = [];
+        this.generateNPCs();
+        
+        // Active dialogue/interaction
+        this.activeInteraction = null;
+        this.interactionPrompt = null;
+        
+        // Exit zone (to proceed to next combat floor)
+        this.exitZone = {
+            x: (this.marketWidth / 2 - 2) * this.tileSize,
+            y: 2 * this.tileSize,
+            width: 4 * this.tileSize,
+            height: 2 * this.tileSize
+        };
+        
+        // Camera
+        this.camera = engine.camera;
+        this.camera.x = this.player.x - engine.canvas.width / 2;
+        this.camera.y = this.player.y - engine.canvas.height / 2;
+        
+        // Movement
+        this.moveDirection = { x: 0, y: 0 };
+        
+        // Transition state (leaving market)
+        this.transitioning = false;
+        this.transitionTimer = 0;
+        
+        // Heal player and restore potions on market entry
+        this.restorePlayerOnEntry();
+        
+        // UI Manager for notifications
+        this.uiManager = new UIManager(engine.ctx, engine.canvas);
+        
+        // Notification
+        this.uiManager.addNotification(`Welcome to the ${this.getMarketName()}!`, 'legendary');
+    }
+    
+    getMarketName() {
+        const names = {
+            egypt: 'Bazaar of the Sands',
+            hades: 'Underworld Market',
+            jungle: 'Jungle Trading Post',
+            light: 'Celestial Marketplace',
+            cyber: 'Neon Emporium',
+            stone: 'Mountain Trading Hall'
+        };
+        return names[this.floorTheme] || 'Market';
+    }
+    
+    restorePlayerOnEntry() {
+        // Full health restore
+        this.player.health = this.player.maxHealth;
+        
+        // Full mana restore
+        this.player.mana = this.player.maxMana;
+        
+        // Restore potions (give 3 of each if less)
+        if (!this.player.potions) {
+            this.player.potions = { health: 3, mana: 3 };
+        } else {
+            this.player.potions.health = Math.max(this.player.potions.health, 3);
+            this.player.potions.mana = Math.max(this.player.potions.mana, 3);
+        }
+        
+        this.soundManager.playHeal();
+    }
+    
+    generateNPCs() {
+        // Get building positions and create NPCs for each
+        const buildings = this.marketLayout.buildings;
+        
+        for (const building of buildings) {
+            // Each building has an NPC attendant
+            const npc = new MarketNPC(
+                building.type === BUILDING_TYPES.FORTUNE_TELLER ? NPC_TYPES.FORTUNE_TELLER :
+                building.type === BUILDING_TYPES.ARENA ? NPC_TYPES.ARENA_MASTER :
+                building.type === BUILDING_TYPES.GUILD ? NPC_TYPES.GUILD_MASTER :
+                building.type === BUILDING_TYPES.MERCENARY_CAMP ? NPC_TYPES.MERCENARY :
+                building.type === BUILDING_TYPES.CLASS_HALL ? NPC_TYPES.CLASS_TRAINER :
+                NPC_TYPES.MERCHANT,
+                building.gridX * this.tileSize + this.tileSize * 2,
+                building.gridY * this.tileSize + this.tileSize * 2,
+                building
+            );
+            npc.isFemale = Math.random() > 0.5;
+            this.npcs.push(npc);
+        }
+        
+        // Add wandering NPCs
+        for (let i = 0; i < 8; i++) {
+            const x = randomInt(5, this.marketWidth - 5) * this.tileSize;
+            const y = randomInt(5, this.marketHeight - 5) * this.tileSize;
+            const npc = new MarketNPC(
+                Math.random() > 0.7 ? NPC_TYPES.GUARD : NPC_TYPES.WANDERER,
+                x, y, null
+            );
+            npc.isFemale = Math.random() > 0.5;
+            npc.isWanderer = true;
+            this.npcs.push(npc);
+        }
+    }
+    
+    update(dt) {
+        // Handle transitioning to next floor
+        if (this.transitioning) {
+            this.transitionTimer += dt;
+            if (this.transitionTimer >= 1.5) {
+                return 'exitMarket';
+            }
+            return GameState.MARKET;
+        }
+        
+        // Handle active UI panels
+        if (this.marketUI.hasActivePanel()) {
+            // Check for escape to close
+            if (this.engine.wasKeyJustPressed('Escape')) {
+                this.marketUI.closeAllPanels();
+            }
+            
+            // Handle clicks in panels
+            if (this.engine.wasMouseJustPressed(0)) {
+                const mouse = this.engine.getMousePosition();
+                this.marketUI.handleClick(mouse.x, mouse.y);
+            }
+            
+            return GameState.MARKET;
+        }
+        
+        // Movement input
+        this.moveDirection = { x: 0, y: 0 };
+        
+        if (this.engine.isKeyPressed('KeyW') || this.engine.isKeyPressed('ArrowUp')) {
+            this.moveDirection.y = -1;
+        }
+        if (this.engine.isKeyPressed('KeyS') || this.engine.isKeyPressed('ArrowDown')) {
+            this.moveDirection.y = 1;
+        }
+        if (this.engine.isKeyPressed('KeyA') || this.engine.isKeyPressed('ArrowLeft')) {
+            this.moveDirection.x = -1;
+        }
+        if (this.engine.isKeyPressed('KeyD') || this.engine.isKeyPressed('ArrowRight')) {
+            this.moveDirection.x = 1;
+        }
+        
+        // Normalize diagonal movement
+        const len = Math.sqrt(this.moveDirection.x ** 2 + this.moveDirection.y ** 2);
+        if (len > 0) {
+            this.moveDirection.x /= len;
+            this.moveDirection.y /= len;
+        }
+        
+        // Move player
+        const speed = 200; // Market walk speed
+        const newX = this.player.x + this.moveDirection.x * speed * dt;
+        const newY = this.player.y + this.moveDirection.y * speed * dt;
+        
+        // Keep player in bounds
+        this.player.x = clamp(newX, this.tileSize, (this.marketWidth - 1) * this.tileSize);
+        this.player.y = clamp(newY, this.tileSize, (this.marketHeight - 1) * this.tileSize);
+        
+        // Update mercenary position
+        if (this.mercenary) {
+            const targetX = this.player.x + 40;
+            const targetY = this.player.y;
+            const dx = targetX - this.mercenary.x;
+            const dy = targetY - this.mercenary.y;
+            const dist = Math.sqrt(dx*dx + dy*dy);
+            if (dist > 5) {
+                this.mercenary.x += (dx / dist) * speed * 0.8 * dt;
+                this.mercenary.y += (dy / dist) * speed * 0.8 * dt;
+            }
+            
+            // Mercenary periodic dialogue
+            if (!this.mercenary.dialogueTimer) this.mercenary.dialogueTimer = 0;
+            this.mercenary.dialogueTimer += dt;
+            if (this.mercenary.dialogueTimer > 8 + Math.random() * 5) {
+                this.mercenary.dialogueTimer = 0;
+                this.mercenary.speak();
+            }
+        }
+        
+        // Update wandering NPCs
+        for (const npc of this.npcs) {
+            if (npc.isWanderer) {
+                npc.updateWander(dt, 0, 0, this.marketWidth * this.tileSize, this.marketHeight * this.tileSize);
+            }
+        }
+        
+        // Check for NPC interactions
+        this.interactionPrompt = null;
+        let nearestNPC = null;
+        let nearestDist = 60; // Interaction range
+        
+        for (const npc of this.npcs) {
+            const dx = npc.x - this.player.x;
+            const dy = npc.y - this.player.y;
+            const dist = Math.sqrt(dx*dx + dy*dy);
+            
+            if (dist < nearestDist) {
+                nearestDist = dist;
+                nearestNPC = npc;
+            }
+        }
+        
+        if (nearestNPC) {
+            this.interactionPrompt = {
+                text: `Press E to ${this.getInteractionText(nearestNPC)}`,
+                npc: nearestNPC
+            };
+            
+            if (this.engine.wasKeyJustPressed('KeyE')) {
+                this.interactWithNPC(nearestNPC);
+            }
+        }
+        
+        // Check exit zone
+        if (this.player.x >= this.exitZone.x && 
+            this.player.x <= this.exitZone.x + this.exitZone.width &&
+            this.player.y >= this.exitZone.y && 
+            this.player.y <= this.exitZone.y + this.exitZone.height) {
+            
+            if (!this.interactionPrompt) {
+                this.interactionPrompt = {
+                    text: 'Press E to descend to next floor',
+                    npc: null
+                };
+            }
+            
+            if (this.engine.wasKeyJustPressed('KeyE') && !nearestNPC) {
+                this.transitioning = true;
+                this.uiManager.addNotification('Descending...', 'legendary');
+            }
+        }
+        
+        // Update camera
+        this.camera.x = this.player.x - this.engine.canvas.width / 2;
+        this.camera.y = this.player.y - this.engine.canvas.height / 2;
+        
+        // Clamp camera to market bounds
+        this.camera.x = clamp(this.camera.x, 0, this.marketWidth * this.tileSize - this.engine.canvas.width);
+        this.camera.y = clamp(this.camera.y, 0, this.marketHeight * this.tileSize - this.engine.canvas.height);
+        
+        // Update notifications
+        this.uiManager.update(dt);
+        
+        return GameState.MARKET;
+    }
+    
+    getInteractionText(npc) {
+        switch (npc.type) {
+            case NPC_TYPES.MERCHANT: return 'Shop';
+            case NPC_TYPES.FORTUNE_TELLER: return 'Get Reading';
+            case NPC_TYPES.ARENA_MASTER: return 'Enter Arena';
+            case NPC_TYPES.GUILD_MASTER: return 'View Quests';
+            case NPC_TYPES.MERCENARY: return 'Hire Mercenary';
+            case NPC_TYPES.CLASS_TRAINER: return 'Get Advice';
+            case NPC_TYPES.GUARD: return 'Talk';
+            case NPC_TYPES.WANDERER: return 'Talk';
+            default: return 'Interact';
+        }
+    }
+    
+    interactWithNPC(npc) {
+        // Play NPC sound
+        this.soundManager.playNPCInteract(npc.isFemale);
+        
+        switch (npc.type) {
+            case NPC_TYPES.MERCHANT:
+                this.marketUI.openShop(npc.building);
+                break;
+            case NPC_TYPES.FORTUNE_TELLER:
+                this.marketUI.openFortuneTeller(this.currentFloor);
+                break;
+            case NPC_TYPES.ARENA_MASTER:
+                this.marketUI.openArenaPanel();
+                break;
+            case NPC_TYPES.GUILD_MASTER:
+                this.marketUI.openGuildPanel();
+                break;
+            case NPC_TYPES.MERCENARY:
+                if (!this.mercenary) {
+                    this.marketUI.openMercenaryPanel((merc) => this.hireMercenary(merc));
+                } else {
+                    this.uiManager.addNotification('You already have a mercenary!', 'warning');
+                }
+                break;
+            case NPC_TYPES.CLASS_TRAINER:
+                this.showClassAdvice(npc);
+                break;
+            case NPC_TYPES.GUARD:
+            case NPC_TYPES.WANDERER:
+                this.showRandomDialogue(npc);
+                break;
+        }
+    }
+    
+    hireMercenary(mercenary) {
+        if (this.player.gold >= mercenary.hireCost) {
+            this.player.gold -= mercenary.hireCost;
+            this.mercenary = mercenary;
+            this.player.mercenary = mercenary;
+            this.mercenary.x = this.player.x + 40;
+            this.mercenary.y = this.player.y;
+            this.uiManager.addNotification(`${mercenary.name} has joined you!`, 'legendary');
+            this.soundManager.playCoin();
+        } else {
+            this.uiManager.addNotification('Not enough gold!', 'warning');
+        }
+    }
+    
+    showClassAdvice(npc) {
+        const advice = this.getClassAdvice();
+        this.uiManager.addNotification(advice, 'info');
+    }
+    
+    getClassAdvice() {
+        const adviceList = [
+            "Remember to use your abilities wisely!",
+            "Potions can save your life in tough fights.",
+            "Explore every room for hidden treasures.",
+            "Bosses have patterns - learn them!",
+            "Upgrading your weapon is crucial for progress.",
+            "Don't forget to level up your skills!",
+            "Some enemies are weak to certain damage types.",
+            "Dodge rolling can avoid most attacks."
+        ];
+        return adviceList[Math.floor(Math.random() * adviceList.length)];
+    }
+    
+    showRandomDialogue(npc) {
+        const dialogues = [
+            "The dungeon grows more dangerous below...",
+            "I've heard strange sounds from the depths.",
+            "Be careful, adventurer. Many don't return.",
+            "The market has the best deals around!",
+            "Have you visited the fortune teller?",
+            "The arena champions are legendary fighters.",
+            "A good mercenary is worth their weight in gold.",
+            "May fortune favor your journey!"
+        ];
+        const dialogue = dialogues[Math.floor(Math.random() * dialogues.length)];
+        this.uiManager.addNotification(`"${dialogue}"`, 'info');
+    }
+    
+    render(ctx) {
+        // Clear canvas
+        ctx.fillStyle = this.getMarketBackgroundColor();
+        ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+        
+        // Save context and apply camera transform
+        ctx.save();
+        ctx.translate(-this.camera.x, -this.camera.y);
+        
+        // Draw market floor
+        this.renderMarketFloor(ctx);
+        
+        // Draw buildings
+        this.renderBuildings(ctx);
+        
+        // Draw exit zone
+        this.renderExitZone(ctx);
+        
+        // Draw NPCs
+        for (const npc of this.npcs) {
+            this.renderNPC(ctx, npc);
+        }
+        
+        // Draw mercenary
+        if (this.mercenary) {
+            this.renderMercenary(ctx);
+        }
+        
+        // Draw player
+        this.renderPlayer(ctx);
+        
+        // Restore context
+        ctx.restore();
+        
+        // Draw UI elements (screen space)
+        this.renderUI(ctx);
+        
+        // Draw market UI panels
+        this.marketUI.render(ctx);
+        
+        // Draw transition overlay
+        if (this.transitioning) {
+            const alpha = this.transitionTimer / 1.5;
+            ctx.fillStyle = `rgba(0, 0, 0, ${alpha})`;
+            ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+        }
+        
+        // Draw notifications
+        this.uiManager.renderNotifications(ctx);
+    }
+    
+    getMarketBackgroundColor() {
+        const colors = {
+            egypt: '#1a1508',
+            hades: '#1a0808',
+            jungle: '#081a08',
+            light: '#18181a',
+            cyber: '#080818',
+            stone: '#121212'
+        };
+        return colors[this.floorTheme] || '#1a1a2e';
+    }
+    
+    renderMarketFloor(ctx) {
+        const theme = FLOOR_THEMES[this.floorTheme];
+        const floorColor = theme ? theme.colors.floor : '#3a3a3a';
+        const accentColor = theme ? theme.colors.accent : '#ffd700';
+        
+        // Draw floor tiles
+        for (let y = 0; y < this.marketHeight; y++) {
+            for (let x = 0; x < this.marketWidth; x++) {
+                const tileX = x * this.tileSize;
+                const tileY = y * this.tileSize;
+                
+                // Checkered pattern
+                const isLight = (x + y) % 2 === 0;
+                ctx.fillStyle = isLight ? floorColor : this.darkenColor(floorColor, 0.15);
+                ctx.fillRect(tileX, tileY, this.tileSize, this.tileSize);
+                
+                // Occasional decorative tiles
+                if (Math.random() < 0.02) {
+                    ctx.fillStyle = accentColor + '33';
+                    ctx.fillRect(tileX + 4, tileY + 4, this.tileSize - 8, this.tileSize - 8);
+                }
+            }
+        }
+        
+        // Draw walls around perimeter
+        const wallColor = theme ? theme.colors.wall : '#555';
+        ctx.fillStyle = wallColor;
+        
+        // Top wall (except exit)
+        ctx.fillRect(0, 0, this.exitZone.x, this.tileSize * 2);
+        ctx.fillRect(this.exitZone.x + this.exitZone.width, 0, 
+                     this.marketWidth * this.tileSize - this.exitZone.x - this.exitZone.width, this.tileSize * 2);
+        
+        // Bottom, left, right walls
+        ctx.fillRect(0, (this.marketHeight - 2) * this.tileSize, this.marketWidth * this.tileSize, this.tileSize * 2);
+        ctx.fillRect(0, 0, this.tileSize * 2, this.marketHeight * this.tileSize);
+        ctx.fillRect((this.marketWidth - 2) * this.tileSize, 0, this.tileSize * 2, this.marketHeight * this.tileSize);
+    }
+    
+    darkenColor(hex, factor) {
+        const r = parseInt(hex.slice(1,3), 16);
+        const g = parseInt(hex.slice(3,5), 16);
+        const b = parseInt(hex.slice(5,7), 16);
+        return `rgb(${Math.floor(r*(1-factor))}, ${Math.floor(g*(1-factor))}, ${Math.floor(b*(1-factor))})`;
+    }
+    
+    renderBuildings(ctx) {
+        const theme = FLOOR_THEMES[this.floorTheme];
+        
+        for (const building of this.marketLayout.buildings) {
+            const x = building.gridX * this.tileSize;
+            const y = building.gridY * this.tileSize;
+            const w = building.width * this.tileSize;
+            const h = building.height * this.tileSize;
+            
+            // Building base
+            const buildingColor = theme ? theme.colors.wall : '#555';
+            ctx.fillStyle = buildingColor;
+            ctx.fillRect(x, y, w, h);
+            
+            // Building roof
+            ctx.fillStyle = this.getBuildingRoofColor(building.type);
+            ctx.fillRect(x + 4, y + 4, w - 8, 20);
+            
+            // Building sign
+            ctx.fillStyle = '#fff';
+            ctx.font = 'bold 12px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText(this.getBuildingName(building.type), x + w/2, y + 18);
+            ctx.textAlign = 'left';
+            
+            // Entrance
+            ctx.fillStyle = '#2a2a2a';
+            ctx.fillRect(x + w/2 - 15, y + h - 25, 30, 25);
+        }
+    }
+    
+    getBuildingRoofColor(type) {
+        const colors = {
+            [BUILDING_TYPES.WEAPON_SHOP]: '#8b0000',
+            [BUILDING_TYPES.ARMOR_SHOP]: '#4682b4',
+            [BUILDING_TYPES.POTION_SHOP]: '#228b22',
+            [BUILDING_TYPES.GENERAL_STORE]: '#8b4513',
+            [BUILDING_TYPES.FORTUNE_TELLER]: '#9400d3',
+            [BUILDING_TYPES.ARENA]: '#ff4500',
+            [BUILDING_TYPES.GUILD]: '#daa520',
+            [BUILDING_TYPES.MERCENARY_CAMP]: '#2f4f4f',
+            [BUILDING_TYPES.CLASS_HALL]: '#4169e1',
+            [BUILDING_TYPES.INN]: '#cd853f'
+        };
+        return colors[type] || '#555';
+    }
+    
+    getBuildingName(type) {
+        const names = {
+            [BUILDING_TYPES.WEAPON_SHOP]: '⚔️ Weapons',
+            [BUILDING_TYPES.ARMOR_SHOP]: '🛡️ Armor',
+            [BUILDING_TYPES.POTION_SHOP]: '🧪 Potions',
+            [BUILDING_TYPES.GENERAL_STORE]: '📦 General',
+            [BUILDING_TYPES.FORTUNE_TELLER]: '🔮 Fortune',
+            [BUILDING_TYPES.ARENA]: '⚔️ Arena',
+            [BUILDING_TYPES.GUILD]: '📜 Guild',
+            [BUILDING_TYPES.MERCENARY_CAMP]: '🗡️ Mercenaries',
+            [BUILDING_TYPES.CLASS_HALL]: '📚 Class Hall',
+            [BUILDING_TYPES.INN]: '🏨 Inn'
+        };
+        return names[type] || 'Building';
+    }
+    
+    renderExitZone(ctx) {
+        // Draw exit portal/stairs
+        const x = this.exitZone.x;
+        const y = this.exitZone.y;
+        const w = this.exitZone.width;
+        const h = this.exitZone.height;
+        
+        // Glowing portal effect
+        const gradient = ctx.createRadialGradient(
+            x + w/2, y + h/2, 0,
+            x + w/2, y + h/2, w/2
+        );
+        gradient.addColorStop(0, '#4444ff');
+        gradient.addColorStop(0.5, '#2222aa');
+        gradient.addColorStop(1, '#111155');
+        
+        ctx.fillStyle = gradient;
+        ctx.beginPath();
+        ctx.ellipse(x + w/2, y + h/2, w/2, h/2, 0, 0, Math.PI * 2);
+        ctx.fill();
+        
+        // Text
+        ctx.fillStyle = '#fff';
+        ctx.font = 'bold 14px Arial';
+        ctx.textAlign = 'center';
+        ctx.fillText('↓ Descend ↓', x + w/2, y + h/2 + 5);
+        ctx.textAlign = 'left';
+    }
+    
+    renderNPC(ctx, npc) {
+        // NPC body
+        const color = this.getNPCColor(npc.type);
+        ctx.fillStyle = color;
+        ctx.fillRect(npc.x - 12, npc.y - 16, 24, 32);
+        
+        // NPC head
+        ctx.fillStyle = npc.isFemale ? '#ffdbac' : '#d4a574';
+        ctx.beginPath();
+        ctx.arc(npc.x, npc.y - 20, 10, 0, Math.PI * 2);
+        ctx.fill();
+        
+        // NPC type indicator
+        ctx.fillStyle = '#fff';
+        ctx.font = '10px Arial';
+        ctx.textAlign = 'center';
+        ctx.fillText(this.getNPCIcon(npc.type), npc.x, npc.y - 30);
+        ctx.textAlign = 'left';
+    }
+    
+    getNPCColor(type) {
+        const colors = {
+            [NPC_TYPES.MERCHANT]: '#8b4513',
+            [NPC_TYPES.FORTUNE_TELLER]: '#9400d3',
+            [NPC_TYPES.ARENA_MASTER]: '#ff4500',
+            [NPC_TYPES.GUILD_MASTER]: '#daa520',
+            [NPC_TYPES.MERCENARY]: '#2f4f4f',
+            [NPC_TYPES.CLASS_TRAINER]: '#4169e1',
+            [NPC_TYPES.GUARD]: '#708090',
+            [NPC_TYPES.WANDERER]: '#696969'
+        };
+        return colors[type] || '#555';
+    }
+    
+    getNPCIcon(type) {
+        const icons = {
+            [NPC_TYPES.MERCHANT]: '💰',
+            [NPC_TYPES.FORTUNE_TELLER]: '🔮',
+            [NPC_TYPES.ARENA_MASTER]: '⚔️',
+            [NPC_TYPES.GUILD_MASTER]: '📜',
+            [NPC_TYPES.MERCENARY]: '🗡️',
+            [NPC_TYPES.CLASS_TRAINER]: '📚',
+            [NPC_TYPES.GUARD]: '🛡️',
+            [NPC_TYPES.WANDERER]: '👤'
+        };
+        return icons[type] || '❓';
+    }
+    
+    renderMercenary(ctx) {
+        // Mercenary body
+        ctx.fillStyle = '#4a90d9';
+        ctx.fillRect(this.mercenary.x - 12, this.mercenary.y - 16, 24, 32);
+        
+        // Mercenary head
+        ctx.fillStyle = '#d4a574';
+        ctx.beginPath();
+        ctx.arc(this.mercenary.x, this.mercenary.y - 20, 10, 0, Math.PI * 2);
+        ctx.fill();
+        
+        // Name tag
+        ctx.fillStyle = '#fff';
+        ctx.font = '10px Arial';
+        ctx.textAlign = 'center';
+        ctx.fillText(this.mercenary.name, this.mercenary.x, this.mercenary.y - 35);
+        ctx.textAlign = 'left';
+        
+        // Health bar
+        const healthPercent = this.mercenary.health / this.mercenary.maxHealth;
+        ctx.fillStyle = '#333';
+        ctx.fillRect(this.mercenary.x - 15, this.mercenary.y + 18, 30, 4);
+        ctx.fillStyle = '#4ade80';
+        ctx.fillRect(this.mercenary.x - 15, this.mercenary.y + 18, 30 * healthPercent, 4);
+    }
+    
+    renderPlayer(ctx) {
+        // Player body
+        ctx.fillStyle = '#4CAF50';
+        ctx.fillRect(this.player.x - 12, this.player.y - 16, 24, 32);
+        
+        // Player head
+        ctx.fillStyle = '#ffdbac';
+        ctx.beginPath();
+        ctx.arc(this.player.x, this.player.y - 20, 10, 0, Math.PI * 2);
+        ctx.fill();
+        
+        // Player indicator
+        ctx.fillStyle = '#ffd700';
+        ctx.font = '12px Arial';
+        ctx.textAlign = 'center';
+        ctx.fillText('▼', this.player.x, this.player.y - 40);
+        ctx.textAlign = 'left';
+    }
+    
+    renderUI(ctx) {
+        // Interaction prompt
+        if (this.interactionPrompt) {
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+            ctx.fillRect(ctx.canvas.width / 2 - 120, ctx.canvas.height - 60, 240, 40);
+            
+            ctx.fillStyle = '#fff';
+            ctx.font = '16px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText(this.interactionPrompt.text, ctx.canvas.width / 2, ctx.canvas.height - 35);
+            ctx.textAlign = 'left';
+        }
+        
+        // Gold display
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+        ctx.fillRect(10, 10, 120, 30);
+        ctx.fillStyle = '#ffd700';
+        ctx.font = 'bold 16px Arial';
+        ctx.fillText(`💰 ${this.player.gold || 0}`, 20, 32);
+        
+        // Floor indicator
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+        ctx.fillRect(10, 50, 150, 25);
+        ctx.fillStyle = '#aaa';
+        ctx.font = '14px Arial';
+        ctx.fillText(`Next: Floor ${this.currentFloor + 1}`, 20, 68);
+        
+        // Player stats mini-display
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+        ctx.fillRect(ctx.canvas.width - 160, 10, 150, 60);
+        
+        // Health
+        ctx.fillStyle = '#ff4444';
+        ctx.fillText(`❤️ ${Math.floor(this.player.health)}/${this.player.maxHealth}`, ctx.canvas.width - 150, 30);
+        
+        // Mana
+        ctx.fillStyle = '#4444ff';
+        ctx.fillText(`💧 ${Math.floor(this.player.mana)}/${this.player.maxMana}`, ctx.canvas.width - 150, 50);
+        
+        // Potions
+        const hp = this.player.potions?.health || 0;
+        const mp = this.player.potions?.mana || 0;
+        ctx.fillStyle = '#aaa';
+        ctx.fillText(`🧪 HP:${hp} MP:${mp}`, ctx.canvas.width - 150, 65);
+    }
+}
+
 // Death Screen Scene
 class DeathScene extends Scene {
     constructor(engine, floor, level) {
@@ -4837,6 +5564,25 @@ class IntoTheDeluge {
                         return;
                     }
                     
+                    // Check if transitioning to market
+                    if (this.currentScene.goToMarket) {
+                        // Store reference to game scene
+                        this.gameScene = this.currentScene;
+                        
+                        // Create market scene
+                        this.currentScene = new MarketScene(
+                            this.engine,
+                            this.gameScene.player,
+                            this.gameScene.currentFloor,
+                            this.gameScene.currentFloorTheme
+                        );
+                        this.state = GameState.MARKET;
+                        
+                        // Show cursor in market
+                        this.engine.canvas.style.cursor = 'default';
+                        return;
+                    }
+                    
                     const result = this.currentScene.update(dt);
                     if (result === GameState.DEAD) {
                         this.currentScene = new DeathScene(
@@ -4849,12 +5595,34 @@ class IntoTheDeluge {
                 }
                 break;
                 
+            case GameState.MARKET:
+                if (this.currentScene) {
+                    const result = this.currentScene.update(dt);
+                    if (result === 'exitMarket') {
+                        // Return to game scene and advance to next floor
+                        this.gameScene.continueFromMarket();
+                        
+                        // Transfer mercenary to player if hired
+                        if (this.currentScene.mercenary) {
+                            this.gameScene.player.mercenary = this.currentScene.mercenary;
+                        }
+                        
+                        this.currentScene = this.gameScene;
+                        this.state = GameState.PLAYING;
+                        
+                        // Hide cursor during gameplay
+                        this.engine.canvas.style.cursor = 'none';
+                    }
+                }
+                break;
+                
             case GameState.DEAD:
                 if (this.currentScene) {
                     const result = this.currentScene.update(dt);
                     if (result === 'restart') {
                         this.state = GameState.CLASS_SELECT;
                         this.currentScene = null;
+                        this.gameScene = null;
                         // Show cursor when returning to class selection
                         this.engine.canvas.style.cursor = 'default';
                     }
@@ -4871,6 +5639,7 @@ class IntoTheDeluge {
                 
             case GameState.PLAYING:
             case GameState.DEAD:
+            case GameState.MARKET:
                 if (this.currentScene) {
                     this.currentScene.render(ctx);
                 }
