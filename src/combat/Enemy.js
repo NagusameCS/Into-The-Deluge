@@ -708,7 +708,16 @@ export class Enemy extends Entity {
             'scatterShot',
             'ricochetBurst',
             'arcingVolley',
-            'seekerMissiles'
+            'seekerMissiles',
+            // New creative spawn patterns
+            'wallBarrage',
+            'ceilingRain',
+            'floorEruption',
+            'cornerTrap',
+            'zigzagVolley',
+            'sineWave',
+            'snakePattern',
+            'arrowRain'
         ];
         
         // Melee/dash patterns
@@ -727,6 +736,14 @@ export class Enemy extends Entity {
             'trackingOrbCircle',
             'vortexPull',
             'laserSweep',
+            // New geometric/creative patterns
+            'pentagramStrike',
+            'hexagonalGrid',
+            'spiralGalaxy',
+            'orbitalBombardment',
+            'diamondCage',
+            'starBurst',
+            'clockworkSpiral',
             ...bossSpecificPatterns
         ];
         
@@ -741,6 +758,9 @@ export class Enemy extends Entity {
             patterns.push(...projectilePatterns.slice(5));
             patterns.push('bulletHellSpiral', 'bouncingOrbs', 'shadowClones');
             patterns.push('homingBarrage', 'novaBlast', 'chainLightning');
+            // New phase 2 patterns
+            patterns.push('convergeExpand', 'mirrorImage', 'pulseWave', 'triangleFormation');
+            patterns.push('crossfireTrap', 'encircle', 'laserFence');
         }
         
         // Phase 3 unlocks most dangerous
@@ -748,6 +768,9 @@ export class Enemy extends Entity {
             patterns.push(...meleePatterns.slice(4));
             patterns.push('ultimateBlast', 'omniDirectional', 'trackingSwarm', 'deathRay', 'meteorStorm');
             patterns.push('bulletHellFlower', 'homingMissileBarrage', 'voidRift', 'annihilationBeam');
+            // New phase 3 patterns - most dangerous
+            patterns.push('pillarsOfDoom', 'chaosOrbs', 'galaxyArms', 'pinwheel');
+            patterns.push('checkerboard', 'crescentMoon', 'vortexSuck');
         }
         
         // Filter out recently used patterns (no repeats from last 5)
@@ -776,34 +799,43 @@ export class Enemy extends Entity {
     
     // Get boss-specific unique patterns
     getBossSpecificPatterns() {
-        // Original bosses
+        // Original bosses - each with 10+ unique patterns
         if (this.enemyType === 'skeletonKing' || this.name === 'Skeleton King') {
-            return ['boneStorm', 'graveRise', 'royalExecution', 'boneWall', 'skeletonRush', 'curseOfDeath'];
+            return ['boneStorm', 'graveRise', 'royalExecution', 'boneWall', 'skeletonRush', 'curseOfDeath',
+                    'pentagramStrike', 'encircle', 'crescentMoon', 'chaosOrbs'];
         }
         if (this.enemyType === 'dragonLord' || this.name === 'Dragon Lord') {
-            return ['fireBreathSweep', 'wingBlast', 'dragonFury', 'meteorRain', 'flameVortex', 'dragonRoar'];
+            return ['fireBreathSweep', 'wingBlast', 'dragonFury', 'meteorRain', 'flameVortex', 'dragonRoar',
+                    'ceilingRain', 'pillarsOfDoom', 'arrowRain', 'galaxyArms'];
         }
         if (this.enemyType === 'lichKing' || this.name === 'Lich King') {
-            return ['soulDrain', 'frostTomb', 'deathCoil', 'iceSpikes', 'phantomGrasp', 'necromanticRift'];
+            return ['soulDrain', 'frostTomb', 'deathCoil', 'iceSpikes', 'phantomGrasp', 'necromanticRift',
+                    'vortexSuck', 'spiralGalaxy', 'hexagonalGrid', 'convergeExpand'];
         }
-        // Themed bosses
+        // Themed bosses - each with 10+ unique patterns
         if (this.enemyType === 'pharaoh' || this.name === 'Pharaoh') {
-            return ['lightningChain', 'sandstormLightning', 'pyramidStrike', 'scarabSwarm', 'sandTornado', 'curseOfTheSun'];
+            return ['lightningChain', 'sandstormLightning', 'pyramidStrike', 'scarabSwarm', 'sandTornado', 'curseOfTheSun',
+                    'cornerTrap', 'diamondCage', 'clockworkSpiral', 'starBurst'];
         }
         if (this.enemyType === 'cerberus' || this.name === 'Cerberus') {
-            return ['hellfireBreath', 'tripleChomp', 'infernoCircle', 'spiralBounce', 'splittingFlame', 'fireWave', 'hellShockwave', 'lavaPools'];
+            return ['hellfireBreath', 'tripleChomp', 'infernoCircle', 'spiralBounce', 'splittingFlame', 'fireWave', 'hellShockwave', 'lavaPools',
+                    'wallBarrage', 'crossfireTrap', 'floorEruption', 'pinwheel'];
         }
         if (this.enemyType === 'queenSpider' || this.name === 'Spider Queen') {
-            return ['webTrap', 'venomSpray', 'spiderSwarm', 'cocoonBomb', 'silkLine', 'toxicBurst'];
+            return ['webTrap', 'venomSpray', 'spiderSwarm', 'cocoonBomb', 'silkLine', 'toxicBurst',
+                    'snakePattern', 'zigzagVolley', 'encircle', 'triangleFormation'];
         }
         if (this.enemyType === 'archangel' || this.name === 'Archangel') {
-            return ['holyRain', 'divineBeam', 'purifyingLight', 'lightPillars', 'orbGridStrike', 'celestialCross', 'angelicDescent', 'radiantNova'];
+            return ['holyRain', 'divineBeam', 'purifyingLight', 'lightPillars', 'orbGridStrike', 'celestialCross', 'angelicDescent', 'radiantNova',
+                    'mirrorImage', 'pulseWave', 'sineWave', 'checkerboard'];
         }
         if (this.enemyType === 'masterAI' || this.name === 'Master A.I.') {
-            return ['laserGrid', 'droneSwarm', 'systemHack', 'dataStorm', 'firewall', 'virusInfection'];
+            return ['laserGrid', 'droneSwarm', 'systemHack', 'dataStorm', 'firewall', 'virusInfection',
+                    'laserFence', 'orbitalBombardment', 'hexagonalGrid', 'crossfireTrap'];
         }
         if (this.enemyType === 'ancientGolem' || this.name === 'Ancient Golem') {
-            return ['earthquakeWave', 'boulderToss', 'stoneSkin', 'crystalSpikes', 'rockyBarrier', 'seismicStomp'];
+            return ['earthquakeWave', 'boulderToss', 'stoneSkin', 'crystalSpikes', 'rockyBarrier', 'seismicStomp',
+                    'floorEruption', 'wallBarrage', 'pillarsOfDoom', 'ceilingRain'];
         }
         return [];
     }
@@ -5686,6 +5718,1186 @@ export class Enemy extends Entity {
                         };
                         this.isBossDashing = false;
                         this.endBossPattern();
+                    }
+                }
+                break;
+            
+            // ========== NEW CREATIVE SPAWN PATTERNS ==========
+            // Projectiles that spawn from walls, floor, ceiling, geometric shapes
+            
+            case 'wallBarrage':
+                // Projectiles spawn from all four walls and fire inward
+                this.patternData.timer = (this.patternData.timer || 0) + dt;
+                this.patternData.waves = this.patternData.waves || 0;
+                this.velocity.x = 0;
+                this.velocity.y = 0;
+                
+                if (this.patternData.timer > 0.4) {
+                    this.patternData.timer = 0;
+                    this.patternData.waves++;
+                    
+                    const roomWidth = 600;
+                    const roomHeight = 450;
+                    const centerX = this.target.x;
+                    const centerY = this.target.y;
+                    
+                    // Spawn from each wall
+                    for (let i = 0; i < 5; i++) {
+                        const offset = (i - 2) * 60;
+                        // Top wall
+                        this.pendingAttack = {
+                            type: 'projectile',
+                            damage: this.damage * 0.3,
+                            x: centerX + offset, y: centerY - roomHeight/2,
+                            targetX: centerX + offset, targetY: centerY,
+                            speed: 300, owner: this
+                        };
+                        // Bottom wall
+                        this.pendingAttack = {
+                            type: 'projectile',
+                            damage: this.damage * 0.3,
+                            x: centerX + offset, y: centerY + roomHeight/2,
+                            targetX: centerX + offset, targetY: centerY,
+                            speed: 300, owner: this
+                        };
+                        // Left wall
+                        this.pendingAttack = {
+                            type: 'projectile',
+                            damage: this.damage * 0.3,
+                            x: centerX - roomWidth/2, y: centerY + offset,
+                            targetX: centerX, targetY: centerY + offset,
+                            speed: 300, owner: this
+                        };
+                        // Right wall
+                        this.pendingAttack = {
+                            type: 'projectile',
+                            damage: this.damage * 0.3,
+                            x: centerX + roomWidth/2, y: centerY + offset,
+                            targetX: centerX, targetY: centerY + offset,
+                            speed: 300, owner: this
+                        };
+                    }
+                    
+                    if (this.patternData.waves >= 4) {
+                        this.endBossPattern();
+                    }
+                }
+                break;
+                
+            case 'ceilingRain':
+                // Projectiles rain down from above in waves
+                this.patternData.timer = (this.patternData.timer || 0) + dt;
+                this.patternData.drops = this.patternData.drops || 0;
+                this.velocity.x = 0;
+                this.velocity.y = 0;
+                
+                if (this.patternData.timer > 0.08) {
+                    this.patternData.timer = 0;
+                    this.patternData.drops++;
+                    
+                    // Random x position above player area
+                    const spawnX = this.target.x + (Math.random() - 0.5) * 400;
+                    const spawnY = this.target.y - 300;
+                    
+                    this.pendingAttack = {
+                        type: 'projectile',
+                        damage: this.damage * 0.25,
+                        x: spawnX, y: spawnY,
+                        targetX: spawnX, targetY: spawnY + 600,
+                        speed: 350 + Math.random() * 150,
+                        owner: this
+                    };
+                    
+                    if (this.patternData.drops >= 50) {
+                        this.endBossPattern();
+                    }
+                }
+                break;
+                
+            case 'floorEruption':
+                // Projectiles erupt from ground in lines
+                if (this.patternStep === 0) {
+                    this.velocity.x = 0;
+                    this.velocity.y = 0;
+                    this.patternData.timer = 0;
+                    this.patternData.lines = 0;
+                    this.patternStep = 1;
+                } else if (this.patternStep === 1) {
+                    this.patternData.timer += dt;
+                    
+                    if (this.patternData.timer > 0.3) {
+                        this.patternData.timer = 0;
+                        this.patternData.lines++;
+                        
+                        // Line of eruptions from boss toward player
+                        const angle = Math.atan2(this.target.y - this.y, this.target.x - this.x);
+                        for (let i = 1; i <= 8; i++) {
+                            const dist = i * 50;
+                            const eruptX = this.x + Math.cos(angle) * dist;
+                            const eruptY = this.y + Math.sin(angle) * dist;
+                            
+                            // Projectile shoots upward from that point
+                            this.pendingAttack = {
+                                type: 'projectile',
+                                damage: this.damage * 0.35,
+                                x: eruptX, y: eruptY + 20,
+                                targetX: eruptX + (Math.random() - 0.5) * 60,
+                                targetY: eruptY - 150,
+                                speed: 250,
+                                owner: this
+                            };
+                        }
+                        
+                        if (this.patternData.lines >= 4) {
+                            this.endBossPattern();
+                        }
+                    }
+                }
+                break;
+                
+            case 'pentagramStrike':
+                // Create a pentagram with projectiles at each point firing at player
+                if (this.patternStep === 0) {
+                    this.velocity.x = 0;
+                    this.velocity.y = 0;
+                    this.patternData.timer = 0;
+                    this.patternData.points = [];
+                    
+                    // Calculate pentagram points around player
+                    for (let i = 0; i < 5; i++) {
+                        const angle = (i / 5) * Math.PI * 2 - Math.PI / 2;
+                        this.patternData.points.push({
+                            x: this.target.x + Math.cos(angle) * 180,
+                            y: this.target.y + Math.sin(angle) * 180
+                        });
+                    }
+                    this.patternStep = 1;
+                } else if (this.patternStep === 1) {
+                    this.patternData.timer += dt;
+                    
+                    if (this.patternData.timer > 0.8) {
+                        // Fire from all 5 points toward player
+                        for (const point of this.patternData.points) {
+                            this.pendingAttack = {
+                                type: 'projectile',
+                                damage: this.damage * 0.5,
+                                x: point.x, y: point.y,
+                                targetX: this.target.x,
+                                targetY: this.target.y,
+                                speed: 400,
+                                owner: this
+                            };
+                        }
+                        // Also draw lines between points
+                        for (let i = 0; i < 5; i++) {
+                            const p1 = this.patternData.points[i];
+                            const p2 = this.patternData.points[(i + 2) % 5];
+                            const steps = 5;
+                            for (let s = 0; s < steps; s++) {
+                                const t = s / steps;
+                                this.pendingAttack = {
+                                    type: 'projectile',
+                                    damage: this.damage * 0.2,
+                                    x: p1.x + (p2.x - p1.x) * t,
+                                    y: p1.y + (p2.y - p1.y) * t,
+                                    targetX: this.target.x,
+                                    targetY: this.target.y,
+                                    speed: 200 + s * 40,
+                                    owner: this
+                                };
+                            }
+                        }
+                        this.endBossPattern();
+                    }
+                }
+                break;
+                
+            case 'hexagonalGrid':
+                // Hexagonal grid of projectiles forms then collapses
+                if (this.patternStep === 0) {
+                    this.velocity.x = 0;
+                    this.velocity.y = 0;
+                    this.patternData.timer = 0;
+                    this.patternData.hexPoints = [];
+                    
+                    // Generate hexagonal grid around player
+                    const rings = 3;
+                    const spacing = 70;
+                    this.patternData.hexPoints.push({x: this.target.x, y: this.target.y});
+                    
+                    for (let ring = 1; ring <= rings; ring++) {
+                        for (let i = 0; i < 6 * ring; i++) {
+                            const segment = Math.floor(i / ring);
+                            const offset = i % ring;
+                            const angle = segment * Math.PI / 3;
+                            const cornerX = this.target.x + Math.cos(angle) * spacing * ring;
+                            const cornerY = this.target.y + Math.sin(angle) * spacing * ring;
+                            const nextAngle = (segment + 1) * Math.PI / 3;
+                            const nextX = this.target.x + Math.cos(nextAngle) * spacing * ring;
+                            const nextY = this.target.y + Math.sin(nextAngle) * spacing * ring;
+                            const t = offset / ring;
+                            this.patternData.hexPoints.push({
+                                x: cornerX + (nextX - cornerX) * t,
+                                y: cornerY + (nextY - cornerY) * t
+                            });
+                        }
+                    }
+                    this.patternStep = 1;
+                } else if (this.patternStep === 1) {
+                    this.patternData.timer += dt;
+                    
+                    if (this.patternData.timer > 1.2) {
+                        // Fire all hex points toward player
+                        for (const point of this.patternData.hexPoints) {
+                            const dist = Math.sqrt((point.x - this.target.x)**2 + (point.y - this.target.y)**2);
+                            if (dist > 20) { // Skip center point
+                                this.pendingAttack = {
+                                    type: 'projectile',
+                                    damage: this.damage * 0.25,
+                                    x: point.x, y: point.y,
+                                    targetX: this.target.x,
+                                    targetY: this.target.y,
+                                    speed: 280,
+                                    owner: this
+                                };
+                            }
+                        }
+                        this.endBossPattern();
+                    }
+                }
+                break;
+                
+            case 'spiralGalaxy':
+                // Two spiral arms of projectiles rotating outward
+                this.patternData.timer = (this.patternData.timer || 0) + dt;
+                this.patternData.angle = (this.patternData.angle || 0);
+                this.patternData.shots = this.patternData.shots || 0;
+                this.velocity.x = 0;
+                this.velocity.y = 0;
+                
+                if (this.patternData.timer > 0.04) {
+                    this.patternData.timer = 0;
+                    this.patternData.shots++;
+                    this.patternData.angle += 0.12;
+                    
+                    // Two spiral arms
+                    for (let arm = 0; arm < 2; arm++) {
+                        const armAngle = this.patternData.angle + arm * Math.PI;
+                        const spawnDist = 40 + this.patternData.shots * 2;
+                        const spawnX = this.x + Math.cos(armAngle) * spawnDist;
+                        const spawnY = this.y + Math.sin(armAngle) * spawnDist;
+                        
+                        this.pendingAttack = {
+                            type: 'projectile',
+                            damage: this.damage * 0.2,
+                            x: spawnX, y: spawnY,
+                            targetX: spawnX + Math.cos(armAngle) * 200,
+                            targetY: spawnY + Math.sin(armAngle) * 200,
+                            speed: 180,
+                            owner: this
+                        };
+                    }
+                    
+                    if (this.patternData.shots >= 80) {
+                        this.endBossPattern();
+                    }
+                }
+                break;
+                
+            case 'cornerTrap':
+                // Projectiles spawn from corners and converge on player
+                if (this.patternStep === 0) {
+                    this.velocity.x = 0;
+                    this.velocity.y = 0;
+                    this.patternData.timer = 0;
+                    this.patternData.waves = 0;
+                    this.patternStep = 1;
+                } else if (this.patternStep === 1) {
+                    this.patternData.timer += dt;
+                    
+                    if (this.patternData.timer > 0.5) {
+                        this.patternData.timer = 0;
+                        this.patternData.waves++;
+                        
+                        // 4 corners around player
+                        const corners = [
+                            {x: this.target.x - 250, y: this.target.y - 200},
+                            {x: this.target.x + 250, y: this.target.y - 200},
+                            {x: this.target.x - 250, y: this.target.y + 200},
+                            {x: this.target.x + 250, y: this.target.y + 200}
+                        ];
+                        
+                        for (const corner of corners) {
+                            // Fan of projectiles from each corner
+                            for (let i = 0; i < 3; i++) {
+                                const spread = (i - 1) * 0.15;
+                                const angle = Math.atan2(this.target.y - corner.y, this.target.x - corner.x) + spread;
+                                this.pendingAttack = {
+                                    type: 'projectile',
+                                    damage: this.damage * 0.3,
+                                    x: corner.x, y: corner.y,
+                                    targetX: corner.x + Math.cos(angle) * 400,
+                                    targetY: corner.y + Math.sin(angle) * 400,
+                                    speed: 350,
+                                    owner: this
+                                };
+                            }
+                        }
+                        
+                        if (this.patternData.waves >= 5) {
+                            this.endBossPattern();
+                        }
+                    }
+                }
+                break;
+                
+            case 'zigzagVolley':
+                // Projectiles that move in zigzag patterns
+                this.patternData.timer = (this.patternData.timer || 0) + dt;
+                this.patternData.volleys = this.patternData.volleys || 0;
+                this.velocity.x = 0;
+                this.velocity.y = 0;
+                
+                if (this.patternData.timer > 0.15) {
+                    this.patternData.timer = 0;
+                    this.patternData.volleys++;
+                    
+                    const baseAngle = Math.atan2(this.target.y - this.y, this.target.x - this.x);
+                    const zigzag = Math.sin(this.patternData.volleys * 0.5) * 0.4;
+                    
+                    this.pendingAttack = {
+                        type: 'projectile',
+                        damage: this.damage * 0.35,
+                        x: this.x, y: this.y,
+                        targetX: this.x + Math.cos(baseAngle + zigzag) * 400,
+                        targetY: this.y + Math.sin(baseAngle + zigzag) * 400,
+                        speed: 320,
+                        owner: this
+                    };
+                    
+                    if (this.patternData.volleys >= 25) {
+                        this.endBossPattern();
+                    }
+                }
+                break;
+                
+            case 'orbitalBombardment':
+                // Projectiles orbit boss then launch outward
+                if (this.patternStep === 0) {
+                    this.velocity.x = 0;
+                    this.velocity.y = 0;
+                    this.patternData.timer = 0;
+                    this.patternData.orbiters = [];
+                    
+                    // Create orbiting projectiles
+                    for (let i = 0; i < 12; i++) {
+                        this.patternData.orbiters.push({
+                            angle: (i / 12) * Math.PI * 2,
+                            radius: 100,
+                            launched: false
+                        });
+                    }
+                    this.patternStep = 1;
+                } else if (this.patternStep === 1) {
+                    this.patternData.timer += dt;
+                    
+                    // Orbit phase - rotate projectiles
+                    for (const orb of this.patternData.orbiters) {
+                        orb.angle += dt * 4;
+                    }
+                    
+                    if (this.patternData.timer > 1.5) {
+                        // Launch all toward player!
+                        for (const orb of this.patternData.orbiters) {
+                            if (!orb.launched) {
+                                orb.launched = true;
+                                const orbX = this.x + Math.cos(orb.angle) * orb.radius;
+                                const orbY = this.y + Math.sin(orb.angle) * orb.radius;
+                                
+                                this.pendingAttack = {
+                                    type: 'projectile',
+                                    damage: this.damage * 0.4,
+                                    x: orbX, y: orbY,
+                                    targetX: this.target.x,
+                                    targetY: this.target.y,
+                                    speed: 400,
+                                    owner: this
+                                };
+                            }
+                        }
+                        this.endBossPattern();
+                    }
+                }
+                break;
+                
+            case 'convergeExpand':
+                // Projectiles converge to point then explode outward
+                if (this.patternStep === 0) {
+                    this.velocity.x = 0;
+                    this.velocity.y = 0;
+                    this.patternData.timer = 0;
+                    this.patternData.centerX = (this.x + this.target.x) / 2;
+                    this.patternData.centerY = (this.y + this.target.y) / 2;
+                    
+                    // Fire converging projectiles
+                    for (let i = 0; i < 16; i++) {
+                        const angle = (i / 16) * Math.PI * 2;
+                        const spawnDist = 200;
+                        this.pendingAttack = {
+                            type: 'projectile',
+                            damage: this.damage * 0.25,
+                            x: this.patternData.centerX + Math.cos(angle) * spawnDist,
+                            y: this.patternData.centerY + Math.sin(angle) * spawnDist,
+                            targetX: this.patternData.centerX,
+                            targetY: this.patternData.centerY,
+                            speed: 200,
+                            owner: this
+                        };
+                    }
+                    this.patternStep = 1;
+                } else if (this.patternStep === 1) {
+                    this.patternData.timer += dt;
+                    
+                    if (this.patternData.timer > 1.0) {
+                        // Explosion outward from center
+                        for (let i = 0; i < 24; i++) {
+                            const angle = (i / 24) * Math.PI * 2;
+                            this.pendingAttack = {
+                                type: 'projectile',
+                                damage: this.damage * 0.3,
+                                x: this.patternData.centerX,
+                                y: this.patternData.centerY,
+                                targetX: this.patternData.centerX + Math.cos(angle) * 400,
+                                targetY: this.patternData.centerY + Math.sin(angle) * 400,
+                                speed: 350,
+                                owner: this
+                            };
+                        }
+                        this.endBossPattern();
+                    }
+                }
+                break;
+                
+            case 'diamondCage':
+                // Diamond shape forms around player then fires inward
+                if (this.patternStep === 0) {
+                    this.velocity.x = 0;
+                    this.velocity.y = 0;
+                    this.patternData.timer = 0;
+                    this.patternData.fired = false;
+                    this.patternStep = 1;
+                } else if (this.patternStep === 1) {
+                    this.patternData.timer += dt;
+                    
+                    if (this.patternData.timer > 1.0 && !this.patternData.fired) {
+                        this.patternData.fired = true;
+                        
+                        // Diamond points
+                        const dist = 180;
+                        const points = [
+                            {x: this.target.x, y: this.target.y - dist}, // Top
+                            {x: this.target.x + dist, y: this.target.y}, // Right
+                            {x: this.target.x, y: this.target.y + dist}, // Bottom
+                            {x: this.target.x - dist, y: this.target.y}  // Left
+                        ];
+                        
+                        // Fire from each edge of diamond
+                        for (let i = 0; i < 4; i++) {
+                            const p1 = points[i];
+                            const p2 = points[(i + 1) % 4];
+                            for (let t = 0; t <= 1; t += 0.2) {
+                                const px = p1.x + (p2.x - p1.x) * t;
+                                const py = p1.y + (p2.y - p1.y) * t;
+                                this.pendingAttack = {
+                                    type: 'projectile',
+                                    damage: this.damage * 0.3,
+                                    x: px, y: py,
+                                    targetX: this.target.x,
+                                    targetY: this.target.y,
+                                    speed: 300,
+                                    owner: this
+                                };
+                            }
+                        }
+                        this.endBossPattern();
+                    }
+                }
+                break;
+                
+            case 'starBurst':
+                // 8-pointed star pattern radiating from boss
+                if (this.patternStep === 0) {
+                    this.velocity.x = 0;
+                    this.velocity.y = 0;
+                    this.patternData.timer = 0;
+                    this.patternData.bursts = 0;
+                    this.patternStep = 1;
+                } else if (this.patternStep === 1) {
+                    this.patternData.timer += dt;
+                    
+                    if (this.patternData.timer > 0.2) {
+                        this.patternData.timer = 0;
+                        this.patternData.bursts++;
+                        
+                        // 8 directions + 8 diagonal for star effect
+                        for (let i = 0; i < 16; i++) {
+                            const angle = (i / 16) * Math.PI * 2;
+                            // Alternate long/short rays for star shape
+                            const rayLength = i % 2 === 0 ? 400 : 250;
+                            const speed = i % 2 === 0 ? 350 : 250;
+                            
+                            this.pendingAttack = {
+                                type: 'projectile',
+                                damage: this.damage * 0.25,
+                                x: this.x, y: this.y,
+                                targetX: this.x + Math.cos(angle) * rayLength,
+                                targetY: this.y + Math.sin(angle) * rayLength,
+                                speed: speed,
+                                owner: this
+                            };
+                        }
+                        
+                        if (this.patternData.bursts >= 4) {
+                            this.endBossPattern();
+                        }
+                    }
+                }
+                break;
+                
+            case 'crossfireTrap':
+                // Projectiles from left/right then top/bottom in sequence
+                if (this.patternStep === 0) {
+                    this.velocity.x = 0;
+                    this.velocity.y = 0;
+                    this.patternData.timer = 0;
+                    this.patternData.phase = 'horizontal';
+                    this.patternStep = 1;
+                } else if (this.patternStep === 1) {
+                    this.patternData.timer += dt;
+                    
+                    if (this.patternData.timer > 0.6) {
+                        this.patternData.timer = 0;
+                        
+                        if (this.patternData.phase === 'horizontal') {
+                            // Fire from left and right
+                            for (let i = 0; i < 8; i++) {
+                                const offset = (i - 3.5) * 30;
+                                // From left
+                                this.pendingAttack = {
+                                    type: 'projectile', damage: this.damage * 0.3,
+                                    x: this.target.x - 300, y: this.target.y + offset,
+                                    targetX: this.target.x + 300, targetY: this.target.y + offset,
+                                    speed: 400, owner: this
+                                };
+                                // From right
+                                this.pendingAttack = {
+                                    type: 'projectile', damage: this.damage * 0.3,
+                                    x: this.target.x + 300, y: this.target.y + offset,
+                                    targetX: this.target.x - 300, targetY: this.target.y + offset,
+                                    speed: 400, owner: this
+                                };
+                            }
+                            this.patternData.phase = 'vertical';
+                        } else {
+                            // Fire from top and bottom
+                            for (let i = 0; i < 8; i++) {
+                                const offset = (i - 3.5) * 30;
+                                // From top
+                                this.pendingAttack = {
+                                    type: 'projectile', damage: this.damage * 0.3,
+                                    x: this.target.x + offset, y: this.target.y - 250,
+                                    targetX: this.target.x + offset, targetY: this.target.y + 250,
+                                    speed: 400, owner: this
+                                };
+                                // From bottom
+                                this.pendingAttack = {
+                                    type: 'projectile', damage: this.damage * 0.3,
+                                    x: this.target.x + offset, y: this.target.y + 250,
+                                    targetX: this.target.x + offset, targetY: this.target.y - 250,
+                                    speed: 400, owner: this
+                                };
+                            }
+                            this.endBossPattern();
+                        }
+                    }
+                }
+                break;
+                
+            case 'clockworkSpiral':
+                // Clock-like spiral with projectiles at "hours"
+                this.patternData.timer = (this.patternData.timer || 0) + dt;
+                this.patternData.hour = this.patternData.hour || 0;
+                this.velocity.x = 0;
+                this.velocity.y = 0;
+                
+                if (this.patternData.timer > 0.15) {
+                    this.patternData.timer = 0;
+                    this.patternData.hour++;
+                    
+                    const hourAngle = ((this.patternData.hour % 12) / 12) * Math.PI * 2 - Math.PI / 2;
+                    const handLength = 150;
+                    const handEndX = this.x + Math.cos(hourAngle) * handLength;
+                    const handEndY = this.y + Math.sin(hourAngle) * handLength;
+                    
+                    // Fire from hand end toward player
+                    this.pendingAttack = {
+                        type: 'projectile',
+                        damage: this.damage * 0.35,
+                        x: handEndX, y: handEndY,
+                        targetX: this.target.x,
+                        targetY: this.target.y,
+                        speed: 350,
+                        owner: this
+                    };
+                    
+                    if (this.patternData.hour >= 36) { // 3 full rotations
+                        this.endBossPattern();
+                    }
+                }
+                break;
+                
+            case 'mirrorImage':
+                // Projectiles from boss mirrored on opposite side
+                this.patternData.timer = (this.patternData.timer || 0) + dt;
+                this.patternData.shots = this.patternData.shots || 0;
+                this.velocity.x = 0;
+                this.velocity.y = 0;
+                
+                if (this.patternData.timer > 0.12) {
+                    this.patternData.timer = 0;
+                    this.patternData.shots++;
+                    
+                    const baseAngle = Math.atan2(this.target.y - this.y, this.target.x - this.x);
+                    const spread = (Math.random() - 0.5) * 0.6;
+                    
+                    // Original shot
+                    this.pendingAttack = {
+                        type: 'projectile', damage: this.damage * 0.3,
+                        x: this.x, y: this.y,
+                        targetX: this.x + Math.cos(baseAngle + spread) * 300,
+                        targetY: this.y + Math.sin(baseAngle + spread) * 300,
+                        speed: 300, owner: this
+                    };
+                    
+                    // Mirror shot from opposite side
+                    const mirrorX = this.target.x * 2 - this.x;
+                    const mirrorY = this.target.y * 2 - this.y;
+                    const mirrorAngle = Math.atan2(this.target.y - mirrorY, this.target.x - mirrorX);
+                    
+                    this.pendingAttack = {
+                        type: 'projectile', damage: this.damage * 0.3,
+                        x: mirrorX, y: mirrorY,
+                        targetX: mirrorX + Math.cos(mirrorAngle + spread) * 300,
+                        targetY: mirrorY + Math.sin(mirrorAngle + spread) * 300,
+                        speed: 300, owner: this
+                    };
+                    
+                    if (this.patternData.shots >= 20) {
+                        this.endBossPattern();
+                    }
+                }
+                break;
+                
+            case 'pulseWave':
+                // Expanding pulse rings from boss
+                if (this.patternStep === 0) {
+                    this.velocity.x = 0;
+                    this.velocity.y = 0;
+                    this.patternData.timer = 0;
+                    this.patternData.pulses = 0;
+                    this.patternStep = 1;
+                } else if (this.patternStep === 1) {
+                    this.patternData.timer += dt;
+                    
+                    if (this.patternData.timer > 0.4) {
+                        this.patternData.timer = 0;
+                        this.patternData.pulses++;
+                        
+                        // Expanding ring of projectiles
+                        const count = 16 + this.patternData.pulses * 4;
+                        const rotOffset = this.patternData.pulses * 0.1;
+                        
+                        for (let i = 0; i < count; i++) {
+                            const angle = (i / count) * Math.PI * 2 + rotOffset;
+                            this.pendingAttack = {
+                                type: 'projectile', damage: this.damage * 0.25,
+                                x: this.x, y: this.y,
+                                targetX: this.x + Math.cos(angle) * 400,
+                                targetY: this.y + Math.sin(angle) * 400,
+                                speed: 200 + this.patternData.pulses * 30,
+                                owner: this
+                            };
+                        }
+                        
+                        if (this.patternData.pulses >= 5) {
+                            this.endBossPattern();
+                        }
+                    }
+                }
+                break;
+                
+            case 'snakePattern':
+                // Wavy snake-like stream of projectiles
+                this.patternData.timer = (this.patternData.timer || 0) + dt;
+                this.patternData.segments = this.patternData.segments || 0;
+                this.patternData.baseAngle = this.patternData.baseAngle ?? Math.atan2(this.target.y - this.y, this.target.x - this.x);
+                this.velocity.x = 0;
+                this.velocity.y = 0;
+                
+                if (this.patternData.timer > 0.06) {
+                    this.patternData.timer = 0;
+                    this.patternData.segments++;
+                    
+                    const wave = Math.sin(this.patternData.segments * 0.3) * 0.5;
+                    const angle = this.patternData.baseAngle + wave;
+                    
+                    this.pendingAttack = {
+                        type: 'projectile', damage: this.damage * 0.25,
+                        x: this.x, y: this.y,
+                        targetX: this.x + Math.cos(angle) * 400,
+                        targetY: this.y + Math.sin(angle) * 400,
+                        speed: 280, owner: this
+                    };
+                    
+                    if (this.patternData.segments >= 50) {
+                        this.endBossPattern();
+                    }
+                }
+                break;
+                
+            case 'vortexSuck':
+                // Create vortex at player position that pulls then explodes
+                if (this.patternStep === 0) {
+                    this.velocity.x = 0;
+                    this.velocity.y = 0;
+                    this.patternData.timer = 0;
+                    this.patternData.vortexX = this.target.x;
+                    this.patternData.vortexY = this.target.y;
+                    this.showTelegraph = true;
+                    this.telegraphRadius = 100;
+                    this.telegraphColor = 'rgba(100, 0, 150, 0.4)';
+                    this.patternStep = 1;
+                } else if (this.patternStep === 1) {
+                    this.patternData.timer += dt;
+                    this.telegraphRadius = 100 - this.patternData.timer * 50;
+                    
+                    if (this.patternData.timer > 1.5) {
+                        this.showTelegraph = false;
+                        
+                        // Explosion from vortex center
+                        for (let i = 0; i < 20; i++) {
+                            const angle = (i / 20) * Math.PI * 2;
+                            this.pendingAttack = {
+                                type: 'projectile', damage: this.damage * 0.35,
+                                x: this.patternData.vortexX,
+                                y: this.patternData.vortexY,
+                                targetX: this.patternData.vortexX + Math.cos(angle) * 400,
+                                targetY: this.patternData.vortexY + Math.sin(angle) * 400,
+                                speed: 350, owner: this
+                            };
+                        }
+                        this.endBossPattern();
+                    }
+                }
+                break;
+                
+            case 'encircle':
+                // Ring of projectiles forms around player then tightens
+                if (this.patternStep === 0) {
+                    this.velocity.x = 0;
+                    this.velocity.y = 0;
+                    this.patternData.timer = 0;
+                    this.patternData.radius = 200;
+                    this.patternData.waves = 0;
+                    this.patternStep = 1;
+                } else if (this.patternStep === 1) {
+                    this.patternData.timer += dt;
+                    
+                    if (this.patternData.timer > 0.5) {
+                        this.patternData.timer = 0;
+                        this.patternData.waves++;
+                        this.patternData.radius -= 30;
+                        
+                        // Ring of projectiles at current radius
+                        for (let i = 0; i < 16; i++) {
+                            const angle = (i / 16) * Math.PI * 2;
+                            const spawnX = this.target.x + Math.cos(angle) * this.patternData.radius;
+                            const spawnY = this.target.y + Math.sin(angle) * this.patternData.radius;
+                            
+                            this.pendingAttack = {
+                                type: 'projectile', damage: this.damage * 0.3,
+                                x: spawnX, y: spawnY,
+                                targetX: this.target.x,
+                                targetY: this.target.y,
+                                speed: 200, owner: this
+                            };
+                        }
+                        
+                        if (this.patternData.waves >= 5 || this.patternData.radius <= 50) {
+                            this.endBossPattern();
+                        }
+                    }
+                }
+                break;
+                
+            case 'sineWave':
+                // Horizontal sine wave of projectiles
+                this.patternData.timer = (this.patternData.timer || 0) + dt;
+                this.patternData.shots = this.patternData.shots || 0;
+                this.velocity.x = 0;
+                this.velocity.y = 0;
+                
+                if (this.patternData.timer > 0.08) {
+                    this.patternData.timer = 0;
+                    this.patternData.shots++;
+                    
+                    // Fire from left, projectile moves right with sine wave Y
+                    const startY = this.y + Math.sin(this.patternData.shots * 0.4) * 80;
+                    
+                    this.pendingAttack = {
+                        type: 'projectile', damage: this.damage * 0.3,
+                        x: this.x - 50, y: startY,
+                        targetX: this.x + 400, targetY: startY,
+                        speed: 300, owner: this
+                    };
+                    
+                    if (this.patternData.shots >= 40) {
+                        this.endBossPattern();
+                    }
+                }
+                break;
+                
+            case 'triangleFormation':
+                // Triangle of projectiles that rotate and fire
+                if (this.patternStep === 0) {
+                    this.velocity.x = 0;
+                    this.velocity.y = 0;
+                    this.patternData.timer = 0;
+                    this.patternData.rotation = 0;
+                    this.patternData.volleys = 0;
+                    this.patternStep = 1;
+                } else if (this.patternStep === 1) {
+                    this.patternData.timer += dt;
+                    this.patternData.rotation += dt * 2;
+                    
+                    if (this.patternData.timer > 0.3) {
+                        this.patternData.timer = 0;
+                        this.patternData.volleys++;
+                        
+                        // Three points of triangle
+                        for (let i = 0; i < 3; i++) {
+                            const angle = this.patternData.rotation + (i / 3) * Math.PI * 2;
+                            const pointX = this.x + Math.cos(angle) * 120;
+                            const pointY = this.y + Math.sin(angle) * 120;
+                            
+                            // Fire toward player from each triangle point
+                            const toPlayer = Math.atan2(this.target.y - pointY, this.target.x - pointX);
+                            this.pendingAttack = {
+                                type: 'projectile', damage: this.damage * 0.35,
+                                x: pointX, y: pointY,
+                                targetX: pointX + Math.cos(toPlayer) * 300,
+                                targetY: pointY + Math.sin(toPlayer) * 300,
+                                speed: 320, owner: this
+                            };
+                        }
+                        
+                        if (this.patternData.volleys >= 10) {
+                            this.endBossPattern();
+                        }
+                    }
+                }
+                break;
+                
+            case 'pillarsOfDoom':
+                // Vertical pillars of projectiles sweep across arena
+                if (this.patternStep === 0) {
+                    this.velocity.x = 0;
+                    this.velocity.y = 0;
+                    this.patternData.timer = 0;
+                    this.patternData.pillarX = this.x - 200;
+                    this.patternStep = 1;
+                } else if (this.patternStep === 1) {
+                    this.patternData.timer += dt;
+                    
+                    if (this.patternData.timer > 0.15) {
+                        this.patternData.timer = 0;
+                        this.patternData.pillarX += 40;
+                        
+                        // Vertical line of projectiles at pillarX
+                        for (let i = -4; i <= 4; i++) {
+                            const y = this.y + i * 40;
+                            this.pendingAttack = {
+                                type: 'projectile', damage: this.damage * 0.25,
+                                x: this.patternData.pillarX, y: y - 200,
+                                targetX: this.patternData.pillarX, targetY: y + 200,
+                                speed: 350, owner: this
+                            };
+                        }
+                        
+                        if (this.patternData.pillarX > this.x + 200) {
+                            this.endBossPattern();
+                        }
+                    }
+                }
+                break;
+                
+            case 'chaosOrbs':
+                // Random projectiles spawning all around
+                this.patternData.timer = (this.patternData.timer || 0) + dt;
+                this.patternData.orbs = this.patternData.orbs || 0;
+                this.velocity.x = 0;
+                this.velocity.y = 0;
+                
+                if (this.patternData.timer > 0.1) {
+                    this.patternData.timer = 0;
+                    this.patternData.orbs++;
+                    
+                    // Random spawn point around player
+                    const spawnAngle = Math.random() * Math.PI * 2;
+                    const spawnDist = 150 + Math.random() * 100;
+                    const spawnX = this.target.x + Math.cos(spawnAngle) * spawnDist;
+                    const spawnY = this.target.y + Math.sin(spawnAngle) * spawnDist;
+                    
+                    // Fire toward player
+                    this.pendingAttack = {
+                        type: 'projectile', damage: this.damage * 0.3,
+                        x: spawnX, y: spawnY,
+                        targetX: this.target.x + (Math.random() - 0.5) * 60,
+                        targetY: this.target.y + (Math.random() - 0.5) * 60,
+                        speed: 250 + Math.random() * 150,
+                        owner: this
+                    };
+                    
+                    if (this.patternData.orbs >= 30) {
+                        this.endBossPattern();
+                    }
+                }
+                break;
+                
+            case 'laserFence':
+                // Create laser fence lines that sweep across
+                if (this.patternStep === 0) {
+                    this.velocity.x = 0;
+                    this.velocity.y = 0;
+                    this.patternData.timer = 0;
+                    this.patternData.lines = 0;
+                    this.patternData.horizontal = Math.random() > 0.5;
+                    this.patternStep = 1;
+                } else if (this.patternStep === 1) {
+                    this.patternData.timer += dt;
+                    
+                    if (this.patternData.timer > 0.3) {
+                        this.patternData.timer = 0;
+                        this.patternData.lines++;
+                        
+                        // Create line of projectiles
+                        if (this.patternData.horizontal) {
+                            const y = this.target.y + (this.patternData.lines % 2 === 0 ? -100 : 100);
+                            for (let x = -250; x <= 250; x += 30) {
+                                this.pendingAttack = {
+                                    type: 'projectile', damage: this.damage * 0.2,
+                                    x: this.target.x + x, y: y,
+                                    targetX: this.target.x + x, 
+                                    targetY: this.target.y + (this.patternData.lines % 2 === 0 ? 200 : -200),
+                                    speed: 300, owner: this
+                                };
+                            }
+                        } else {
+                            const x = this.target.x + (this.patternData.lines % 2 === 0 ? -100 : 100);
+                            for (let y = -200; y <= 200; y += 30) {
+                                this.pendingAttack = {
+                                    type: 'projectile', damage: this.damage * 0.2,
+                                    x: x, y: this.target.y + y,
+                                    targetX: this.target.x + (this.patternData.lines % 2 === 0 ? 200 : -200),
+                                    targetY: this.target.y + y,
+                                    speed: 300, owner: this
+                                };
+                            }
+                        }
+                        
+                        if (this.patternData.lines >= 6) {
+                            this.endBossPattern();
+                        }
+                    }
+                }
+                break;
+                
+            case 'galaxyArms':
+                // 4 spiral arms like a galaxy
+                this.patternData.timer = (this.patternData.timer || 0) + dt;
+                this.patternData.angle = (this.patternData.angle || 0);
+                this.patternData.shots = this.patternData.shots || 0;
+                this.velocity.x = 0;
+                this.velocity.y = 0;
+                
+                if (this.patternData.timer > 0.05) {
+                    this.patternData.timer = 0;
+                    this.patternData.shots++;
+                    this.patternData.angle += 0.1;
+                    
+                    // 4 arms
+                    for (let arm = 0; arm < 4; arm++) {
+                        const armAngle = this.patternData.angle + arm * Math.PI / 2;
+                        this.pendingAttack = {
+                            type: 'projectile', damage: this.damage * 0.2,
+                            x: this.x, y: this.y,
+                            targetX: this.x + Math.cos(armAngle) * 400,
+                            targetY: this.y + Math.sin(armAngle) * 400,
+                            speed: 220, owner: this
+                        };
+                    }
+                    
+                    if (this.patternData.shots >= 60) {
+                        this.endBossPattern();
+                    }
+                }
+                break;
+                
+            case 'arrowRain':
+                // Arrows rain from multiple angles
+                this.patternData.timer = (this.patternData.timer || 0) + dt;
+                this.patternData.arrows = this.patternData.arrows || 0;
+                this.patternData.angle = this.patternData.angle ?? -Math.PI / 4;
+                this.velocity.x = 0;
+                this.velocity.y = 0;
+                
+                if (this.patternData.timer > 0.08) {
+                    this.patternData.timer = 0;
+                    this.patternData.arrows++;
+                    
+                    // Arrows come from angle above
+                    const spawnDist = 300;
+                    const spawnX = this.target.x + Math.cos(this.patternData.angle) * spawnDist + (Math.random() - 0.5) * 100;
+                    const spawnY = this.target.y + Math.sin(this.patternData.angle) * spawnDist;
+                    
+                    this.pendingAttack = {
+                        type: 'projectile', damage: this.damage * 0.3,
+                        x: spawnX, y: spawnY,
+                        targetX: this.target.x + (Math.random() - 0.5) * 80,
+                        targetY: this.target.y + (Math.random() - 0.5) * 80,
+                        speed: 400, owner: this
+                    };
+                    
+                    // Slowly sweep angle
+                    this.patternData.angle += 0.02;
+                    
+                    if (this.patternData.arrows >= 40) {
+                        this.endBossPattern();
+                    }
+                }
+                break;
+                
+            case 'pinwheel':
+                // Rotating pinwheel pattern
+                this.patternData.timer = (this.patternData.timer || 0) + dt;
+                this.patternData.rotation = (this.patternData.rotation || 0) + dt * 3;
+                this.patternData.shots = this.patternData.shots || 0;
+                this.velocity.x = 0;
+                this.velocity.y = 0;
+                
+                if (this.patternData.timer > 0.08) {
+                    this.patternData.timer = 0;
+                    this.patternData.shots++;
+                    
+                    // 6 blades of pinwheel
+                    for (let blade = 0; blade < 6; blade++) {
+                        const bladeAngle = this.patternData.rotation + blade * Math.PI / 3;
+                        // Each blade fires curved
+                        const curveOffset = Math.sin(this.patternData.shots * 0.3) * 0.3;
+                        
+                        this.pendingAttack = {
+                            type: 'projectile', damage: this.damage * 0.2,
+                            x: this.x, y: this.y,
+                            targetX: this.x + Math.cos(bladeAngle + curveOffset) * 350,
+                            targetY: this.y + Math.sin(bladeAngle + curveOffset) * 350,
+                            speed: 250, owner: this
+                        };
+                    }
+                    
+                    if (this.patternData.shots >= 40) {
+                        this.endBossPattern();
+                    }
+                }
+                break;
+                
+            case 'checkerboard':
+                // Checkerboard pattern of projectiles
+                if (this.patternStep === 0) {
+                    this.velocity.x = 0;
+                    this.velocity.y = 0;
+                    this.patternData.timer = 0;
+                    this.patternData.phase = 0;
+                    this.patternStep = 1;
+                } else if (this.patternStep === 1) {
+                    this.patternData.timer += dt;
+                    
+                    if (this.patternData.timer > 0.6) {
+                        this.patternData.timer = 0;
+                        this.patternData.phase++;
+                        
+                        // Checkerboard - alternate squares
+                        const gridSize = 60;
+                        const offset = this.patternData.phase % 2;
+                        
+                        for (let gx = -3; gx <= 3; gx++) {
+                            for (let gy = -3; gy <= 3; gy++) {
+                                if ((gx + gy + offset) % 2 === 0) {
+                                    const px = this.target.x + gx * gridSize;
+                                    const py = this.target.y + gy * gridSize;
+                                    
+                                    this.pendingAttack = {
+                                        type: 'aoe', damage: this.damage * 0.35,
+                                        x: px, y: py, targetX: px, targetY: py,
+                                        radius: 25, duration: 0.3, owner: this
+                                    };
+                                }
+                            }
+                        }
+                        
+                        if (this.patternData.phase >= 4) {
+                            this.endBossPattern();
+                        }
+                    }
+                }
+                break;
+                
+            case 'crescentMoon':
+                // Crescent-shaped projectile wave
+                if (this.patternStep === 0) {
+                    this.velocity.x = 0;
+                    this.velocity.y = 0;
+                    this.patternData.timer = 0;
+                    this.patternData.waves = 0;
+                    this.patternStep = 1;
+                } else if (this.patternStep === 1) {
+                    this.patternData.timer += dt;
+                    
+                    if (this.patternData.timer > 0.5) {
+                        this.patternData.timer = 0;
+                        this.patternData.waves++;
+                        
+                        const baseAngle = Math.atan2(this.target.y - this.y, this.target.x - this.x);
+                        
+                        // Crescent shape - arc of projectiles
+                        for (let i = 0; i < 9; i++) {
+                            const arcAngle = baseAngle + (i - 4) * 0.15;
+                            // Varying distance for crescent shape
+                            const dist = 60 + Math.abs(i - 4) * 10;
+                            const startX = this.x + Math.cos(arcAngle) * dist;
+                            const startY = this.y + Math.sin(arcAngle) * dist;
+                            
+                            this.pendingAttack = {
+                                type: 'projectile', damage: this.damage * 0.3,
+                                x: startX, y: startY,
+                                targetX: startX + Math.cos(arcAngle) * 300,
+                                targetY: startY + Math.sin(arcAngle) * 300,
+                                speed: 280, owner: this
+                            };
+                        }
+                        
+                        if (this.patternData.waves >= 5) {
+                            this.endBossPattern();
+                        }
                     }
                 }
                 break;
