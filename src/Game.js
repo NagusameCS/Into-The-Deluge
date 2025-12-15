@@ -236,6 +236,10 @@ class GameScene extends Scene {
         // Dev mode - invulnerability and other debug features
         this.devMode = false;
         
+        // Command input system
+        this.commandMode = false;
+        this.commandBuffer = '';
+        
         // Camera
         this.camera = engine.camera;
         
@@ -594,16 +598,45 @@ class GameScene extends Scene {
             this.useManaPotion();
         }
         
-        // Dev mode toggle - Backquote (`) key
-        if (this.engine.wasKeyJustPressed('Backquote')) {
-            this.devMode = !this.devMode;
-            if (this.devMode) {
-                this.player.invulnerable = true;
-                this.uiManager.addNotification('DEV MODE: ON - Invulnerability enabled', 'legendary');
+        // Command input mode - press / to open command prompt
+        if (this.commandMode) {
+            // Handle command input
+            if (this.engine.wasKeyJustPressed('Escape')) {
+                this.commandMode = false;
+                this.commandBuffer = '';
+            } else if (this.engine.wasKeyJustPressed('Enter')) {
+                this.executeCommand(this.commandBuffer.trim().toLowerCase());
+                this.commandMode = false;
+                this.commandBuffer = '';
+            } else if (this.engine.wasKeyJustPressed('Backspace')) {
+                this.commandBuffer = this.commandBuffer.slice(0, -1);
             } else {
-                this.player.invulnerable = false;
-                this.uiManager.addNotification('DEV MODE: OFF', 'info');
+                // Capture typed characters
+                const keyMap = {
+                    'KeyA': 'a', 'KeyB': 'b', 'KeyC': 'c', 'KeyD': 'd', 'KeyE': 'e',
+                    'KeyF': 'f', 'KeyG': 'g', 'KeyH': 'h', 'KeyI': 'i', 'KeyJ': 'j',
+                    'KeyK': 'k', 'KeyL': 'l', 'KeyM': 'm', 'KeyN': 'n', 'KeyO': 'o',
+                    'KeyP': 'p', 'KeyQ': 'q', 'KeyR': 'r', 'KeyS': 's', 'KeyT': 't',
+                    'KeyU': 'u', 'KeyV': 'v', 'KeyW': 'w', 'KeyX': 'x', 'KeyY': 'y',
+                    'KeyZ': 'z', 'Space': ' ',
+                    'Digit0': '0', 'Digit1': '1', 'Digit2': '2', 'Digit3': '3',
+                    'Digit4': '4', 'Digit5': '5', 'Digit6': '6', 'Digit7': '7',
+                    'Digit8': '8', 'Digit9': '9'
+                };
+                for (const [code, char] of Object.entries(keyMap)) {
+                    if (this.engine.wasKeyJustPressed(code)) {
+                        this.commandBuffer += char;
+                    }
+                }
             }
+            return GameState.PLAYING; // Block other input while typing
+        }
+        
+        // Open command prompt with / key
+        if (this.engine.wasKeyJustPressed('Slash')) {
+            this.commandMode = true;
+            this.commandBuffer = '';
+            return GameState.PLAYING;
         }
         
         // While in dev mode, ensure invulnerability persists
@@ -2549,6 +2582,27 @@ class GameScene extends Scene {
         ctx.fillStyle = '#888';
         ctx.font = '14px Arial';
         ctx.fillText(`Floor ${this.currentFloor}`, 10, ctx.canvas.height - 10);
+        
+        // Dev mode indicator
+        if (this.devMode) {
+            ctx.fillStyle = '#ff0';
+            ctx.font = 'bold 12px Arial';
+            ctx.fillText('DEV MODE', 10, ctx.canvas.height - 25);
+        }
+        
+        // Command input overlay
+        if (this.commandMode) {
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
+            ctx.fillRect(0, ctx.canvas.height - 40, ctx.canvas.width, 40);
+            ctx.fillStyle = '#0f0';
+            ctx.font = 'bold 16px monospace';
+            ctx.fillText('> ' + this.commandBuffer + '_', 10, ctx.canvas.height - 15);
+            ctx.fillStyle = '#888';
+            ctx.font = '12px monospace';
+            ctx.textAlign = 'right';
+            ctx.fillText('Press ENTER to execute, ESC to cancel', ctx.canvas.width - 10, ctx.canvas.height - 15);
+            ctx.textAlign = 'left';
+        }
         
         // Interaction prompt
         if (this.interactionPrompt) {
@@ -4668,6 +4722,65 @@ class GameScene extends Scene {
             ctx.fillStyle = '#ff6666';
             ctx.fillRect(-5, -3, 3, 3);
             ctx.fillRect(2, -3, 3, 3);
+        }
+    }
+    
+    // Execute console command
+    executeCommand(command) {
+        const args = command.split(' ');
+        const cmd = args[0];
+        
+        switch (cmd) {
+            case 'devmode':
+            case 'god':
+            case 'godmode':
+                this.devMode = !this.devMode;
+                if (this.devMode) {
+                    this.player.invulnerable = true;
+                    this.uiManager.addNotification('DEV MODE: ON - Invulnerability enabled', 'legendary');
+                } else {
+                    this.player.invulnerable = false;
+                    this.uiManager.addNotification('DEV MODE: OFF', 'info');
+                }
+                break;
+            case 'heal':
+                this.player.health = this.player.maxHealth;
+                this.player.mana = this.player.maxMana;
+                this.uiManager.addNotification('Fully healed!', 'success');
+                break;
+            case 'kill':
+                // Kill all enemies
+                for (const enemy of this.enemies) {
+                    enemy.health = 0;
+                }
+                this.uiManager.addNotification('All enemies killed!', 'legendary');
+                break;
+            case 'gold':
+                const amount = parseInt(args[1]) || 1000;
+                this.player.gold += amount;
+                this.uiManager.addNotification(`Added ${amount} gold!`, 'success');
+                break;
+            case 'level':
+            case 'levelup':
+                const levels = parseInt(args[1]) || 1;
+                for (let i = 0; i < levels; i++) {
+                    this.player.gainExperience(this.player.experienceToLevel);
+                }
+                this.uiManager.addNotification(`Leveled up ${levels} times!`, 'legendary');
+                break;
+            case 'floor':
+            case 'skip':
+                const targetFloor = parseInt(args[1]) || (this.currentFloor + 1);
+                this.currentFloor = targetFloor - 1;
+                this.advanceToNextFloor();
+                this.uiManager.addNotification(`Skipping to floor ${targetFloor}...`, 'legendary');
+                break;
+            case 'help':
+            case '?':
+                this.uiManager.addNotification('Commands: devmode, heal, kill, gold [n], level [n], floor [n]', 'info');
+                break;
+            default:
+                this.uiManager.addNotification(`Unknown command: ${cmd}`, 'error');
         }
     }
     
