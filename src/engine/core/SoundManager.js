@@ -221,8 +221,86 @@ export class SoundManager {
         // Attack sound throttling
         this.lastAttackSoundTime = {};
         
+        // Audio context for proper browser audio handling
+        // Browsers suspend audio until user interaction
+        this.audioContext = null;
+        this.audioUnlocked = false;
+        this.pendingSounds = []; // Queue sounds if audio not yet unlocked
+        
+        // Initialize audio context on first user interaction
+        this.initAudioContext();
+        
         // Preload common sounds
         this.preloadSounds();
+    }
+    
+    // Initialize audio context and set up unlock listeners
+    initAudioContext() {
+        try {
+            const AudioContext = window.AudioContext || window.webkitAudioContext;
+            if (AudioContext) {
+                this.audioContext = new AudioContext();
+                
+                // Check if already unlocked
+                if (this.audioContext.state === 'running') {
+                    this.audioUnlocked = true;
+                }
+                
+                // Listen for state changes
+                this.audioContext.onstatechange = () => {
+                    if (this.audioContext.state === 'running') {
+                        this.audioUnlocked = true;
+                        this.flushPendingSounds();
+                    }
+                };
+            }
+        } catch (e) {
+            console.warn('AudioContext not available:', e);
+            // Fallback: assume audio works
+            this.audioUnlocked = true;
+        }
+        
+        // Add unlock listeners for user interaction
+        const unlockAudio = () => {
+            if (!this.audioUnlocked) {
+                this.unlockAudio();
+            }
+        };
+        
+        // Multiple events to catch various interaction types
+        ['click', 'touchstart', 'keydown', 'mousedown'].forEach(event => {
+            document.addEventListener(event, unlockAudio, { once: false, passive: true });
+        });
+    }
+    
+    // Unlock audio context after user interaction
+    unlockAudio() {
+        if (this.audioUnlocked) return;
+        
+        if (this.audioContext && this.audioContext.state === 'suspended') {
+            this.audioContext.resume().then(() => {
+                this.audioUnlocked = true;
+                this.flushPendingSounds();
+            }).catch(e => {
+                console.warn('Failed to resume audio context:', e);
+            });
+        } else {
+            this.audioUnlocked = true;
+            this.flushPendingSounds();
+        }
+        
+        // Play a silent sound to fully unlock on iOS
+        const silentAudio = new Audio();
+        silentAudio.src = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=';
+        silentAudio.volume = 0;
+        silentAudio.play().catch(() => {});
+    }
+    
+    // Flush any sounds that were queued before audio was unlocked
+    flushPendingSounds() {
+        // Clear pending sounds - they're too old to play now
+        // This prevents the "all sounds play at once" bug
+        this.pendingSounds = [];
     }
     
     // Stop all combat-related sounds (call when combat ends)
@@ -269,6 +347,14 @@ export class SoundManager {
     play(soundKey, volume = 1.0) {
         if (this.muted) return null;
         
+        // If audio isn't unlocked yet, drop the sound (don't queue it)
+        // This prevents the "all sounds play at once" bug
+        if (!this.audioUnlocked) {
+            // Try to unlock on this attempt
+            this.unlockAudio();
+            return null; // Drop this sound, don't queue it
+        }
+        
         const sounds = this.sounds.get(soundKey);
         if (!sounds || sounds.length === 0) {
             console.warn(`Sound not found: ${soundKey}`);
@@ -308,7 +394,14 @@ export class SoundManager {
             if (idx >= 0) actives.splice(idx, 1);
         };
         
-        audio.play().catch(e => console.warn('Audio play failed:', e));
+        // Play immediately - audio should be unlocked by now
+        audio.play().catch(e => {
+            // If play fails, it's likely due to audio context being suspended
+            // Don't log a warning for expected browser behavior
+            if (e.name !== 'NotAllowedError') {
+                console.warn('Audio play failed:', e);
+            }
+        });
         
         return audio;
     }

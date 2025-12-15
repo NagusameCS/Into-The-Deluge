@@ -926,16 +926,19 @@ export class Character extends Entity {
     
     // Add a status effect
     addStatusEffect(effect) {
-        if (!this.statusEffects) this.statusEffects = [];
+        // Ensure statusEffects is a Map
+        if (!this.statusEffects || !(this.statusEffects instanceof Map)) {
+            this.statusEffects = new Map();
+        }
         
         // Check if we already have this effect type
-        const existing = this.statusEffects.find(e => e.type === effect.type);
+        const existing = this.statusEffects.get(effect.type);
         if (existing) {
             // Refresh duration
             existing.duration = Math.max(existing.duration, effect.duration);
             existing.value = effect.value; // Update value too
         } else {
-            this.statusEffects.push({...effect});
+            this.statusEffects.set(effect.type, {...effect});
         }
     }
     
@@ -943,12 +946,22 @@ export class Character extends Entity {
     updateStatusEffects(dt) {
         if (!this.statusEffects) return;
         
-        for (let i = this.statusEffects.length - 1; i >= 0; i--) {
-            const effect = this.statusEffects[i];
-            effect.duration -= dt;
-            
-            if (effect.duration <= 0) {
-                this.statusEffects.splice(i, 1);
+        // Handle Map-based status effects
+        if (this.statusEffects instanceof Map) {
+            for (const [type, effect] of this.statusEffects) {
+                effect.duration -= dt;
+                if (effect.duration <= 0) {
+                    this.statusEffects.delete(type);
+                }
+            }
+        } else {
+            // Fallback for array (legacy)
+            for (let i = this.statusEffects.length - 1; i >= 0; i--) {
+                const effect = this.statusEffects[i];
+                effect.duration -= dt;
+                if (effect.duration <= 0) {
+                    this.statusEffects.splice(i, 1);
+                }
             }
         }
         

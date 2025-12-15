@@ -233,6 +233,9 @@ class GameScene extends Scene {
         // Quit to main menu flag (checked by Game class)
         this.quitToMenu = false;
         
+        // Dev mode - invulnerability and other debug features
+        this.devMode = false;
+        
         // Camera
         this.camera = engine.camera;
         
@@ -589,6 +592,24 @@ class GameScene extends Scene {
         }
         if (this.engine.wasKeyJustPressed('KeyF')) {
             this.useManaPotion();
+        }
+        
+        // Dev mode toggle - Backquote (`) key
+        if (this.engine.wasKeyJustPressed('Backquote')) {
+            this.devMode = !this.devMode;
+            if (this.devMode) {
+                this.player.invulnerable = true;
+                this.uiManager.addNotification('DEV MODE: ON - Invulnerability enabled', 'legendary');
+            } else {
+                this.player.invulnerable = false;
+                this.uiManager.addNotification('DEV MODE: OFF', 'info');
+            }
+        }
+        
+        // While in dev mode, ensure invulnerability persists
+        if (this.devMode) {
+            this.player.invulnerable = true;
+            this.player.health = Math.max(this.player.health, 1); // Can't die
         }
         
         if (this.engine.wasKeyJustPressed('Escape')) {
@@ -1316,8 +1337,8 @@ class GameScene extends Scene {
             this.enemySoundInterval = 2 + Math.random() * 4;
         }
         
-        // Check player death
-        if (this.player.health <= 0) {
+        // Check player death (skip in dev mode)
+        if (this.player.health <= 0 && !this.devMode) {
             this.soundManager.playDeath();
             this.soundManager.stopHeartbeat();
             this.soundManager.fadeMusic(2000); // Fade music over 2 seconds
@@ -5443,40 +5464,209 @@ class MarketScene extends Scene {
     }
 }
 
-// Death Screen Scene
+// Death Screen Scene - Dark Souls inspired
 class DeathScene extends Scene {
     constructor(engine, floor, level) {
         super();
         this.engine = engine;
         this.floor = floor;
         this.level = level;
+        
+        // Fade-in animation state
+        this.fadeProgress = 0;
+        this.fadeInDuration = 2.0; // 2 seconds to fade in
+        this.textFadeDelay = 1.5; // Delay before "YOU DIED" starts appearing
+        this.textFadeProgress = 0;
+        this.textFadeDuration = 1.5; // 1.5 seconds for text to fade in
+        this.statsDelay = 3.5; // Delay before stats appear
+        this.statsProgress = 0;
+        this.statsFadeDuration = 1.0;
+        this.restartDelay = 4.5; // Delay before showing restart prompt
+        this.restartProgress = 0;
+        this.restartFadeDuration = 0.5;
+        this.totalTime = 0;
+        
+        // Pulse effect for "YOU DIED"
+        this.pulseTime = 0;
+        
+        // Blood drip particles
+        this.bloodDrops = [];
+        for (let i = 0; i < 5; i++) {
+            this.bloodDrops.push({
+                x: Math.random() * engine.canvas.width,
+                y: -Math.random() * 100,
+                speed: 30 + Math.random() * 50,
+                size: 2 + Math.random() * 4,
+                delay: Math.random() * 3
+            });
+        }
+        
+        // Can restart flag
+        this.canRestart = false;
     }
     
     update(dt) {
-        if (this.engine.wasKeyJustPressed('Space')) {
+        this.totalTime += dt;
+        
+        // Update fade progress
+        if (this.fadeProgress < 1) {
+            this.fadeProgress = Math.min(1, this.fadeProgress + dt / this.fadeInDuration);
+        }
+        
+        // Update text fade (after delay)
+        if (this.totalTime > this.textFadeDelay && this.textFadeProgress < 1) {
+            this.textFadeProgress = Math.min(1, this.textFadeProgress + dt / this.textFadeDuration);
+        }
+        
+        // Update stats fade (after delay)
+        if (this.totalTime > this.statsDelay && this.statsProgress < 1) {
+            this.statsProgress = Math.min(1, this.statsProgress + dt / this.statsFadeDuration);
+        }
+        
+        // Update restart prompt fade (after delay)
+        if (this.totalTime > this.restartDelay && this.restartProgress < 1) {
+            this.restartProgress = Math.min(1, this.restartProgress + dt / this.restartFadeDuration);
+            if (this.restartProgress >= 1) {
+                this.canRestart = true;
+            }
+        }
+        
+        // Pulse effect
+        this.pulseTime += dt;
+        
+        // Update blood drops
+        for (const drop of this.bloodDrops) {
+            if (this.totalTime > drop.delay) {
+                drop.y += drop.speed * dt;
+                if (drop.y > this.engine.canvas.height + 20) {
+                    drop.y = -20;
+                    drop.x = Math.random() * this.engine.canvas.width;
+                }
+            }
+        }
+        
+        // Only allow restart after delay
+        if (this.canRestart && this.engine.wasKeyJustPressed('Space')) {
             return 'restart';
         }
         return GameState.DEAD;
     }
     
     render(ctx) {
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.9)';
-        ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+        const w = ctx.canvas.width;
+        const h = ctx.canvas.height;
         
-        ctx.fillStyle = '#ff4444';
-        ctx.font = 'bold 48px Arial';
-        ctx.textAlign = 'center';
-        ctx.fillText('YOU DIED', ctx.canvas.width / 2, ctx.canvas.height / 2 - 50);
+        // Dark background with fade-in
+        const bgAlpha = 0.95 * this.fadeProgress;
+        ctx.fillStyle = `rgba(5, 2, 2, ${bgAlpha})`;
+        ctx.fillRect(0, 0, w, h);
         
-        ctx.fillStyle = '#aaa';
-        ctx.font = '24px Arial';
-        ctx.fillText(`Reached Floor ${this.floor} at Level ${this.level}`, ctx.canvas.width / 2, ctx.canvas.height / 2 + 20);
+        // Subtle red vignette
+        if (this.fadeProgress > 0.5) {
+            const vignetteAlpha = (this.fadeProgress - 0.5) * 0.4;
+            const gradient = ctx.createRadialGradient(w/2, h/2, h * 0.3, w/2, h/2, h * 0.8);
+            gradient.addColorStop(0, 'rgba(0, 0, 0, 0)');
+            gradient.addColorStop(1, `rgba(60, 0, 0, ${vignetteAlpha})`);
+            ctx.fillStyle = gradient;
+            ctx.fillRect(0, 0, w, h);
+        }
         
-        ctx.fillStyle = '#fff';
-        ctx.font = '18px Arial';
-        ctx.fillText('Press SPACE to try again', ctx.canvas.width / 2, ctx.canvas.height / 2 + 80);
+        // Blood drip particles
+        for (const drop of this.bloodDrops) {
+            if (this.totalTime > drop.delay) {
+                const dropAlpha = Math.min(1, (this.totalTime - drop.delay) * 0.5) * this.fadeProgress;
+                ctx.fillStyle = `rgba(120, 10, 10, ${dropAlpha * 0.6})`;
+                ctx.beginPath();
+                ctx.ellipse(drop.x, drop.y, drop.size * 0.6, drop.size, 0, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+        
+        // "YOU DIED" text with Dark Souls styling
+        if (this.textFadeProgress > 0) {
+            ctx.save();
+            
+            // Pulse effect - subtle size oscillation
+            const pulse = 1 + Math.sin(this.pulseTime * 2) * 0.02;
+            
+            // Text alpha with easing
+            const textAlpha = this.easeOutCubic(this.textFadeProgress);
+            
+            // Dark red color, slightly desaturated like Dark Souls
+            const red = Math.floor(180 + 20 * Math.sin(this.pulseTime));
+            ctx.fillStyle = `rgba(${red}, 30, 30, ${textAlpha})`;
+            
+            // Use a more dramatic font
+            const fontSize = Math.floor(72 * pulse);
+            ctx.font = `bold ${fontSize}px "Times New Roman", Georgia, serif`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            
+            // Add text shadow/glow for depth
+            ctx.shadowColor = `rgba(100, 0, 0, ${textAlpha * 0.8})`;
+            ctx.shadowBlur = 30;
+            ctx.shadowOffsetX = 0;
+            ctx.shadowOffsetY = 5;
+            
+            // Draw the main text
+            ctx.fillText('YOU DIED', w / 2, h / 2 - 40);
+            
+            // Reset shadow for second pass (glow effect)
+            ctx.shadowColor = `rgba(255, 50, 50, ${textAlpha * 0.3})`;
+            ctx.shadowBlur = 60;
+            ctx.shadowOffsetY = 0;
+            ctx.fillText('YOU DIED', w / 2, h / 2 - 40);
+            
+            ctx.restore();
+        }
+        
+        // Horizontal line decoration (like Dark Souls)
+        if (this.textFadeProgress > 0.5) {
+            const lineAlpha = (this.textFadeProgress - 0.5) * 2;
+            const lineWidth = 200 * lineAlpha;
+            
+            ctx.strokeStyle = `rgba(100, 20, 20, ${lineAlpha * 0.5})`;
+            ctx.lineWidth = 1;
+            
+            // Top line
+            ctx.beginPath();
+            ctx.moveTo(w/2 - lineWidth, h/2 - 90);
+            ctx.lineTo(w/2 + lineWidth, h/2 - 90);
+            ctx.stroke();
+            
+            // Bottom line
+            ctx.beginPath();
+            ctx.moveTo(w/2 - lineWidth, h/2 + 10);
+            ctx.lineTo(w/2 + lineWidth, h/2 + 10);
+            ctx.stroke();
+        }
+        
+        // Stats text
+        if (this.statsProgress > 0) {
+            const statsAlpha = this.easeOutCubic(this.statsProgress);
+            ctx.fillStyle = `rgba(120, 100, 100, ${statsAlpha})`;
+            ctx.font = '20px "Times New Roman", Georgia, serif';
+            ctx.textAlign = 'center';
+            ctx.shadowColor = 'transparent';
+            ctx.shadowBlur = 0;
+            ctx.fillText(`Floor ${this.floor}  •  Level ${this.level}`, w / 2, h / 2 + 60);
+        }
+        
+        // Restart prompt with slow pulse
+        if (this.restartProgress > 0) {
+            const promptAlpha = this.restartProgress * (0.4 + 0.3 * Math.sin(this.pulseTime * 1.5));
+            ctx.fillStyle = `rgba(150, 140, 140, ${promptAlpha})`;
+            ctx.font = '16px "Times New Roman", Georgia, serif';
+            ctx.textAlign = 'center';
+            ctx.fillText('Press SPACE to try again', w / 2, h / 2 + 120);
+        }
         
         ctx.textAlign = 'left';
+    }
+    
+    // Easing function for smooth fade
+    easeOutCubic(t) {
+        return 1 - Math.pow(1 - t, 3);
     }
 }
 
