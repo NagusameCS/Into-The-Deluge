@@ -652,6 +652,15 @@ class GameScene extends Scene {
             if (this.engine.wasMouseJustPressed(0)) {
                 this.inventoryPanel.handleClick(mouse.x, mouse.y);
             }
+            
+            // Handle keyboard navigation for inventory
+            for (const key of ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 
+                               'KeyW', 'KeyA', 'KeyS', 'KeyD', 'Enter', 'Space', 'Tab']) {
+                if (this.engine.wasKeyJustPressed(key)) {
+                    this.inventoryPanel.handleKeyDown(key);
+                    break;
+                }
+            }
             return;
         }
         
@@ -1330,6 +1339,10 @@ class GameScene extends Scene {
             case 'area':
                 this.executeAOEAbility(ability, targetX, targetY, owner);
                 break;
+            case 'zone':
+                // Zone abilities like Blizzard - create persistent damage zone
+                this.executeZoneAbility(ability, targetX, targetY, owner);
+                break;
             case 'instant':
                 this.executeInstantAbility(ability, targetX, targetY, owner);
                 break;
@@ -1345,6 +1358,13 @@ class GameScene extends Scene {
                 break;
             case 'taunt':
                 this.executeTauntAbility(ability, owner);
+                break;
+            case 'debuff':
+                this.executeDebuffAbility(ability, targetX, targetY, owner);
+                break;
+            case 'ultimate':
+                // Ultimate abilities - determine effect based on what properties they have
+                this.executeUltimateAbility(ability, targetX, targetY, startX, startY, dirX, dirY, owner);
                 break;
             default:
                 // Treat as projectile if has range, else melee
@@ -1740,6 +1760,148 @@ class GameScene extends Scene {
                 }
             );
         }
+    }
+    
+    // Execute zone ability (persistent damage areas like Blizzard)
+    executeZoneAbility(ability, targetX, targetY, owner) {
+        const radius = ability.radius || 150;
+        const duration = ability.duration || 6;
+        const color = this.getElementColor(ability.element || 'ice');
+        
+        // Create persistent zone
+        this.combatManager.aoeZones.push({
+            x: targetX,
+            y: targetY,
+            radius: radius,
+            damage: ability.damage || 15,
+            owner: owner,
+            element: ability.element || 'ice',
+            lifetime: duration,
+            maxLifetime: duration,
+            hitInterval: 0.5,
+            lastHitTime: 0,
+            hitEntities: new Set(),
+            effects: ability.effects,
+            isZone: true
+        });
+        
+        // Visual effect for zone creation
+        this.combatManager.createParticleBurst(targetX, targetY, 30, {
+            color: color,
+            speed: 100,
+            size: 6,
+            lifetime: 0.5,
+            glow: true
+        });
+    }
+    
+    // Execute debuff ability
+    executeDebuffAbility(ability, targetX, targetY, owner) {
+        const range = ability.range || 200;
+        const color = this.getElementColor(ability.element || 'dark');
+        
+        // Apply debuff to enemies in range
+        for (const enemy of this.enemies) {
+            if (!enemy.active) continue;
+            const dx = enemy.x - owner.x;
+            const dy = enemy.y - owner.y;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            
+            if (dist < range && ability.effects) {
+                for (const effect of ability.effects) {
+                    enemy.addStatusEffect?.({
+                        type: effect.type,
+                        value: effect.value,
+                        duration: effect.duration || ability.duration || 8,
+                        source: 'ability'
+                    });
+                }
+            }
+        }
+        
+        // Visual wave effect
+        this.combatManager.createParticleBurst(owner.x, owner.y, 20, {
+            color: color,
+            speed: 150,
+            size: 5,
+            lifetime: 0.4,
+            glow: true
+        });
+    }
+    
+    // Execute ultimate ability (special powerful abilities)
+    executeUltimateAbility(ability, targetX, targetY, startX, startY, dirX, dirY, owner) {
+        const color = this.getElementColor(ability.element || 'arcane');
+        
+        // Ultimates can be different things based on their properties
+        // Check if it has damage and radius (AOE ultimate like Elemental Storm)
+        if (ability.damage && ability.radius) {
+            // Large AOE attack
+            this.executeAOEAbility(ability, targetX, targetY, owner);
+            
+            // Extra dramatic particles for ultimate
+            for (let i = 0; i < 30; i++) {
+                const angle = Math.random() * Math.PI * 2;
+                const dist = Math.random() * ability.radius;
+                this.combatManager.addParticle(
+                    targetX + Math.cos(angle) * dist,
+                    targetY + Math.sin(angle) * dist,
+                    {
+                        vx: Math.cos(angle) * 100,
+                        vy: -80 + Math.random() * 60,
+                        color: color,
+                        size: 6 + Math.random() * 4,
+                        lifetime: 0.8,
+                        glow: true
+                    }
+                );
+            }
+        }
+        // Check if it has duration (buff ultimate like Bulwark)
+        else if (ability.duration) {
+            // Apply ultimate buff
+            owner.addStatusEffect?.({
+                type: 'ultimate_buff',
+                value: 1,
+                duration: ability.duration,
+                source: 'ultimate'
+            });
+            
+            // Invulnerability if this is a defensive ultimate
+            if (ability.name && ability.name.toLowerCase().includes('bulwark')) {
+                owner.setInvulnerable?.(ability.duration);
+            }
+            
+            // Dramatic buff visuals
+            this.executeBuffAbility(ability, owner);
+            
+            // Extra particles rising
+            for (let i = 0; i < 20; i++) {
+                this.combatManager.addParticle(
+                    owner.x + (Math.random() - 0.5) * 40,
+                    owner.y + (Math.random() - 0.5) * 40,
+                    {
+                        vx: (Math.random() - 0.5) * 60,
+                        vy: -100 - Math.random() * 80,
+                        color: color,
+                        size: 5 + Math.random() * 3,
+                        lifetime: 1.0,
+                        glow: true
+                    }
+                );
+            }
+        }
+        // Fallback - treat as powerful melee/projectile
+        else {
+            if (ability.range && ability.range > 100) {
+                this.executeProjectileAbility(ability, startX, startY, dirX, dirY, owner);
+            } else {
+                this.executeMeleeAbility(ability, startX, startY, targetX, targetY, owner);
+            }
+        }
+        
+        // Play special ultimate sound
+        this.soundManager.playAbilitySound?.('ultimate');
     }
 
     handleWallCollision(entity) {
@@ -4693,6 +4855,8 @@ class IntoTheDeluge {
                     if (result === 'restart') {
                         this.state = GameState.CLASS_SELECT;
                         this.currentScene = null;
+                        // Show cursor when returning to class selection
+                        this.engine.canvas.style.cursor = 'default';
                     }
                 }
                 break;

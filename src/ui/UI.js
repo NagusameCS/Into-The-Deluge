@@ -1115,12 +1115,23 @@ export class InventoryPanel {
         this.gridRows = 4;
     }
     
-    toggle() {
-        this.visible = !this.visible;
+    show() {
+        this.visible = true;
+        this.selectedSlot = 0;
+        this.selectionMode = 'inventory';
         this.hoveredItem = null;
+    }
+    
+    hide() {
+        this.visible = false;
+        this.hoveredItem = null;
+    }
+    
+    toggle() {
         if (this.visible) {
-            this.selectedSlot = 0;
-            this.selectionMode = 'inventory';
+            this.hide();
+        } else {
+            this.show();
         }
     }
     
@@ -1869,43 +1880,58 @@ export class InventoryPanel {
     handleClick(x, y) {
         if (!this.visible) return false;
         
-        const panelW = 420;
-        const panelH = 520;
+        // Match render dimensions exactly
+        const panelW = 500;
+        const panelH = 580;
         const panelX = this.canvas.width / 2 - panelW / 2;
         const panelY = this.canvas.height / 2 - panelH / 2;
         const slotSize = 50;
+        const spacing = 6;
         const equipSlots = ['weapon', 'armor', 'helmet', 'boots', 'accessory1', 'accessory2'];
-        const gridCols = 5;
-        const gridRows = 4;
+        const gridCols = this.gridCols; // 8
+        const gridRows = this.gridRows; // 4
         
-        // Check equipment slots
+        // Check equipment slots - match renderEquipmentSlots layout
+        const equipSize = 55;
+        const equipSpacing = 8;
+        const equipX = panelX + 180;
+        const equipY = panelY + 80 + 10; // +10 for the label offset
+        
         for (let i = 0; i < equipSlots.length; i++) {
-            const slotX = panelX + 25 + (i % 3) * (slotSize + 15);
-            const slotY = panelY + 90 + Math.floor(i / 3) * (slotSize + 15);
+            const slotCol = i % 3;
+            const slotRow = Math.floor(i / 3);
+            const slotX = equipX + slotCol * (equipSize + equipSpacing);
+            const slotY = equipY + slotRow * (equipSize + equipSpacing + 20);
             
-            if (x >= slotX && x <= slotX + slotSize && y >= slotY && y <= slotY + slotSize) {
+            if (x >= slotX && x <= slotX + equipSize && y >= slotY && y <= slotY + equipSize) {
                 // Click on equipment slot - could unequip
                 const slot = equipSlots[i];
-                const item = this.character.equipment[slot];
+                const item = this.character.equipment?.[slot];
                 if (item) {
                     // Move to inventory if space
-                    const emptySlot = this.character.inventory.findIndex(i => !i);
-                    if (emptySlot !== -1) {
+                    const emptySlot = this.character.inventory?.findIndex(i => !i);
+                    if (emptySlot !== -1 && emptySlot !== undefined) {
                         this.character.inventory[emptySlot] = item;
                         this.character.equipment[slot] = null;
+                        if (this.character.recalculateStats) {
+                            this.character.recalculateStats();
+                        }
                     }
                 }
                 return true;
             }
         }
         
-        // Check inventory slots
+        // Check inventory slots - match renderInventoryGrid layout
+        const gridX = panelX + 25;
+        const gridY = panelY + 280 + 10; // +10 for label offset
+        
         for (let i = 0; i < gridCols * gridRows; i++) {
-            const slotX = panelX + 25 + (i % gridCols) * (slotSize + 10);
-            const slotY = panelY + 230 + Math.floor(i / gridCols) * (slotSize + 10);
+            const slotX = gridX + (i % gridCols) * (slotSize + spacing);
+            const slotY = gridY + Math.floor(i / gridCols) * (slotSize + spacing);
             
             if (x >= slotX && x <= slotX + slotSize && y >= slotY && y <= slotY + slotSize) {
-                const item = this.character.inventory[i];
+                const item = this.character.inventory?.[i];
                 if (item) {
                     // Determine slot for item
                     const slot = item.slot || (item.type === 'weapon' ? 'weapon' : 
@@ -1935,6 +1961,7 @@ export class InventoryPanel {
                     }
                 }
                 this.selectedSlot = i;
+                this.selectionMode = 'inventory';
                 return true;
             }
         }
@@ -1945,21 +1972,58 @@ export class InventoryPanel {
     handleHover(x, y) {
         if (!this.visible) return;
         
-        const panelW = 420;
+        // Match render dimensions exactly
+        const panelW = 500;
+        const panelH = 580;
         const panelX = this.canvas.width / 2 - panelW / 2;
-        const panelY = this.canvas.height / 2 - 520 / 2;
+        const panelY = this.canvas.height / 2 - panelH / 2;
         const slotSize = 50;
-        const gridCols = 5;
-        const gridRows = 4;
+        const spacing = 6;
+        const gridCols = this.gridCols; // 8
+        const gridRows = this.gridRows; // 4
         
         this.hoveredSlot = -1;
+        this.hoveredItem = null;
+        
+        // Check equipment slots
+        const equipSize = 55;
+        const equipSpacing = 8;
+        const equipX = panelX + 180;
+        const equipY = panelY + 80 + 10;
+        const equipSlots = ['weapon', 'armor', 'helmet', 'boots', 'accessory1', 'accessory2'];
+        
+        for (let i = 0; i < equipSlots.length; i++) {
+            const slotCol = i % 3;
+            const slotRow = Math.floor(i / 3);
+            const slotX = equipX + slotCol * (equipSize + equipSpacing);
+            const slotY = equipY + slotRow * (equipSize + equipSpacing + 20);
+            
+            if (x >= slotX && x <= slotX + equipSize && y >= slotY && y <= slotY + equipSize) {
+                const item = this.character.equipment?.[equipSlots[i]];
+                if (item) {
+                    this.hoveredItem = item;
+                    this.hoverX = x + 15;
+                    this.hoverY = y + 15;
+                }
+                return;
+            }
+        }
+        
+        // Check inventory slots
+        const gridX = panelX + 25;
+        const gridY = panelY + 280 + 10;
         
         for (let i = 0; i < gridCols * gridRows; i++) {
-            const slotX = panelX + 25 + (i % gridCols) * (slotSize + 10);
-            const slotY = panelY + 230 + Math.floor(i / gridCols) * (slotSize + 10);
+            const slotX = gridX + (i % gridCols) * (slotSize + spacing);
+            const slotY = gridY + Math.floor(i / gridCols) * (slotSize + spacing);
             
             if (x >= slotX && x <= slotX + slotSize && y >= slotY && y <= slotY + slotSize) {
                 this.hoveredSlot = i;
+                if (this.character.inventory?.[i]) {
+                    this.hoveredItem = this.character.inventory[i];
+                    this.hoverX = x + 15;
+                    this.hoverY = y + 15;
+                }
                 return;
             }
         }
